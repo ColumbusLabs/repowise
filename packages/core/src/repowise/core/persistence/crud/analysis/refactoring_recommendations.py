@@ -212,7 +212,7 @@ async def validation_inputs(
         path: _expand_scopes(path, reached, narrowed[path]) for path, reached in inferred.items()
     }
     hub_targets = [path for path in target_files if path in hubs]
-    runs = await _test_packages(checkout, test_files)
+    runs = await _test_runs(checkout, test_files)
     evidence = await _validation_evidence(
         session,
         repository_id,
@@ -272,7 +272,7 @@ async def repository_checkout(session: AsyncSession, repository_id: str) -> str 
     return await session.scalar(select(Repository.local_path).where(Repository.id == repository_id))
 
 
-async def _test_packages(checkout: str | None, test_files: set[str]) -> TestRuns:
+async def _test_runs(checkout: str | None, test_files: set[str]) -> TestRuns:
     """Where each test runs, from one scan of the checkout's package roots."""
     root = Path(checkout) if checkout else None
     if root is None or not root.is_dir():

@@ -142,10 +142,21 @@ def js_root_runs(tests: Iterable[str]) -> dict[str, list[str | None]]:
     return {path: [_npm(""), _arg(path)] for path in {_file(t) for t in tests if _is_js(t)}}
 
 
+def keeps_runs(tests: Iterable[str], runs: TestRuns) -> bool:
+    """Whether a plan stores its *runs* map: when it holds any, or is empty
+    beside a JS/TS test, so a later read does not take the plan for one stored
+    before runs existed and guess a root ``npm test`` (:func:`stored_runs`)."""
+    return bool(runs) or any(_is_js(test) for test in tests)
+
+
 def stored_runs(validation: Mapping[str, Any]) -> dict[str, list[str | None]]:
     """The ``test_runs`` a stored *validation* holds, plus the run of each JS/TS
-    test a plan stored before JS joined them keeps in ``js_packages``."""
+    test a plan stored before JS joined them keeps in ``js_packages``. A plan
+    stored with neither ran its JS/TS tests from the root, and still does."""
     runs = validation.get("test_runs")
+    if runs is None and validation.get("js_packages") is None:
+        tests = validation.get("tests")
+        return js_root_runs(t for t in tests if isinstance(t, str)) if isinstance(tests, list) else {}
     out = {k: list(v) for k, v in runs.items()} if isinstance(runs, Mapping) else {}
     packages = validation.get("js_packages")
     for path, owner in packages.items() if isinstance(packages, Mapping) else ():
@@ -527,7 +538,8 @@ def _package_commands(tests: list[str], runs: TestRuns) -> list[str]:
 
 
 def _order(run: str) -> tuple[bool, bool, str]:
-    # npm first, the root package's before the rest: Fix first quotes a plan's first command.
+    # JS runs first and the root package's first among them, as before JS joined
+    # the runs: with no Python test, Fix first quotes this first command.
     return not run.startswith("npm "), run != _npm(""), run
 
 
@@ -566,6 +578,7 @@ __all__ = [
     "TestRuns",
     "commands_for_tests",
     "js_root_runs",
+    "keeps_runs",
     "plan_runs",
     "runs_for_tests",
     "stored_runs",

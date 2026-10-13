@@ -140,8 +140,36 @@ def test_the_plan_stores_its_runs_and_reads_them_back() -> None:
     assert stored["test_runs"] == {NESTED: RUN}
     assert "js_packages" not in stored
     assert validation_from_profile(stored).test_runs == {NESTED: RUN}
-    unmapped = build_validation_plan(suggestion, {}, inferred)
-    assert "test_runs" not in unmapped.as_dict()
+    # Built without a run for its JS test, the plan says so, so no read guesses one.
+    unmapped = build_validation_plan(suggestion, {}, inferred).as_dict()
+    assert unmapped["commands"] == [] and unmapped["test_runs"] == {}
+    assert validation_from_profile(unmapped).test_runs == {}
+    assert stage_batches(
+        {"refactoring_type": "extract_method", "validation": unmapped},
+        [{"n": n, "action": "extract"} for n in range(1, 8)],
+    )[0]["commands"] == []
+
+
+def test_a_plan_stored_with_neither_map_runs_its_js_tests_from_the_root() -> None:
+    # Stored before either map existed, or without a checkout: main ran it from the root.
+    legacy = {
+        "basis": "inferred",
+        "via": "import-graph",
+        "total": 2,
+        "tests": [NESTED, "tests/test_b.py"],
+        "truncated": False,
+        "affected_files": [],
+        "affected_symbols": [],
+        "commands": [],
+    }
+    root = {NESTED: ["npm test --", NESTED]}
+    assert validation_from_profile(legacy).test_runs == root
+    batches = stage_batches(
+        {"refactoring_type": "extract_method", "validation": legacy},
+        [{"n": n, "action": "extract"} for n in range(1, 8)],
+    )
+    assert batches is not None
+    assert batches[0]["commands"] == ["pytest tests/test_b.py", f"npm test -- {NESTED}"]
 
 
 def test_a_plan_stored_with_js_packages_serves_the_same_runs() -> None:

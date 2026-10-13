@@ -41,7 +41,7 @@ from repowise.core.code_origin import ship_rank
 from repowise.core.test_paths import is_test_support_path, names_test_for, paired_test_names
 
 from .annotations import PlanAnnotations, partner_rows
-from .commands import TestRuns, commands_for_tests, plan_runs
+from .commands import TestRuns, commands_for_tests, keeps_runs, plan_runs
 from .models import RefactoringSuggestion
 from .render import list_plan
 
@@ -326,7 +326,7 @@ class ValidationPlan:
             "targets": [target.as_dict() for target in self.targets],
             "reasons": self.reasons,
             "prerequisite": self.prerequisite,
-            **({"test_runs": self.test_runs} if self.test_runs else {}),
+            **({"test_runs": self.test_runs} if keeps_runs(self.tests, self.test_runs) else {}),
         }
 
 
