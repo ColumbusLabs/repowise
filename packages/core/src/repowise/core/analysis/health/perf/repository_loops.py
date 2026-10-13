@@ -66,9 +66,34 @@ def _imported_from(pf: Any, name: str, prefixes: tuple[str, ...]) -> bool:
         path = imp.module_path or ""
         if not path.startswith(prefixes):
             continue
-        if path.endswith("." + name) or "*" in imp.imported_names:
+        if path.endswith("." + name) or path.endswith(".*"):
             return True
     return False
+
+
+def _folder(path: str) -> str:
+    return "/" + str(PurePosixPath(path).parent)
+
+
+def _resolves_to(pf: Any, name: str, decl_path: str) -> bool:
+    """Whether *name* in *pf* means the repo's one declaration at *decl_path*, in
+    Java's order: a single-type import, then the same package, then an on-demand
+    import. A name imported from anywhere else is another type."""
+    single = [
+        imp.module_path for imp in pf.imports
+        if (imp.module_path or "").endswith("." + name)
+    ]
+    if single:
+        target = "/" + decl_path.rsplit(".", 1)[0]
+        return any(target.endswith("/" + fqn.replace(".", "/")) for fqn in single)
+    folder = _folder(decl_path)
+    if _folder(pf.file_info.path) == folder:
+        return True
+    return any(
+        folder.endswith("/" + imp.module_path[:-2].replace(".", "/"))
+        for imp in pf.imports
+        if (imp.module_path or "").endswith(".*")
+    )
 
 
 def _scan_packages(pf: Any) -> set[str]:
@@ -105,8 +130,9 @@ def persistence_types(parsed_files: Iterable[Any]) -> frozenset[str]:
     """
     java = [pf for pf in parsed_files if pf.file_info.language == "java"]
     packages = {pkg for pf in java for pkg in _scan_packages(pf)}
-    extends: dict[str, set[str]] = {}
-    declared: dict[str, int] = {}
+    # (child, its file, the parent names it extends) per interface declaration.
+    interfaces: list[tuple[str, Any, list[str]]] = []
+    declared_in: dict[str, list[str]] = {}
     typed: set[str] = set()
     for pf in java:
         parents: dict[str, list[str]] = {}
@@ -115,21 +141,28 @@ def persistence_types(parsed_files: Iterable[Any]) -> frozenset[str]:
         for sym in pf.symbols:
             if sym.kind not in ("class", "interface", "enum"):
                 continue
-            declared[sym.name] = declared.get(sym.name, 0) + 1
+            declared_in.setdefault(sym.name, []).append(pf.file_info.path)
             if sym.kind != "interface":
                 continue
             own = parents.get(sym.name, [])
-            extends.setdefault(sym.name, set()).update(own)
+            interfaces.append((sym.name, pf, own))
             if _seed_interface(pf, sym, own, packages):
                 typed.add(sym.name)
-    ambiguous = {name for name, count in declared.items() if count > 1}
-    typed -= ambiguous
+    unique = {name: paths[0] for name, paths in declared_in.items() if len(paths) == 1}
+    typed &= set(unique)
+    edges = [
+        (child, parent)
+        for child, pf, own in interfaces
+        if child in unique
+        for parent in own
+        if parent in unique and _resolves_to(pf, parent, unique[parent])
+    ]
     grew = True
     while grew:
         grew = False
-        for name, bases in extends.items():
-            if name not in typed and name not in ambiguous and bases & typed:
-                typed.add(name)
+        for child, parent in edges:
+            if child not in typed and parent in typed:
+                typed.add(child)
                 grew = True
     return frozenset(typed)
 

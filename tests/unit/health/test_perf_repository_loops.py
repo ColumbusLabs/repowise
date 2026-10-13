@@ -316,3 +316,46 @@ def test_same_named_base_elsewhere_does_not_type_a_child(tmp_path: Path):
     types = persistence_types(parsed)
     assert "SessionRepository" not in types and "BaseRepository" not in types
     assert _hits(tmp_path, files, "src/cache/Svc.java") == []
+
+
+_DATA_BASE = """
+    package com.data;
+    import org.springframework.data.jpa.repository.JpaRepository;
+    public interface BaseRepository<T> extends JpaRepository<T, Long> {}
+"""
+
+
+@pytest.mark.parametrize(
+    ("child_src", "typed"),
+    [
+        # Imports a same-named base from a library the repo does not contain.
+        ("package cache;\nimport org.ehcache.BaseRepository;\n"
+         "public interface CacheRepository extends BaseRepository<Session> {}\n", False),
+        # No import and another package: the name cannot mean com.data.BaseRepository.
+        ("package cache;\npublic interface CacheRepository extends BaseRepository<Session> {}\n",
+         False),
+        ("package cache;\nimport com.data.BaseRepository;\n"
+         "public interface CacheRepository extends BaseRepository<Session> {}\n", True),
+        ("package cache;\nimport com.data.*;\n"
+         "public interface CacheRepository extends BaseRepository<Session> {}\n", True),
+    ],
+)
+def test_child_typed_only_when_its_base_name_resolves_here(
+    tmp_path: Path, child_src: str, typed: bool
+):
+    _require_java()
+    parsed = [
+        _parse(tmp_path, "src/com/data/BaseRepository.java", _DATA_BASE),
+        _parse(tmp_path, "src/cache/CacheRepository.java", child_src),
+    ]
+    assert ("CacheRepository" in persistence_types(parsed)) is typed
+
+
+def test_spring_base_through_a_wildcard_import(tmp_path: Path):
+    _require_java()
+    parsed = [_parse(tmp_path, "src/a/UserRepository.java", """
+        package a;
+        import org.springframework.data.repository.*;
+        public interface UserRepository extends CrudRepository<User, Long> {}
+    """)]
+    assert persistence_types(parsed) == frozenset({"UserRepository"})
