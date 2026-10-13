@@ -12,6 +12,7 @@ its ``extends`` chain to a Spring Data base, a MyBatis ``@Mapper``, or a
 from __future__ import annotations
 
 import re
+from functools import cache
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
 
@@ -22,7 +23,7 @@ from ..complexity.models import PerfHit
 from ..complexity.perf_walk import _loop_key_feeds, _sink_call_text
 from .dialects import PERF_DIALECTS
 from .io_boundaries import collect_io_names
-from .loop_facts import LoopFacts
+from .loop_facts import LoopFacts, LoopSource
 from .reduction_idioms import walk
 
 if TYPE_CHECKING:
@@ -47,6 +48,9 @@ _SPRING_DATA_BASES = frozenset(
 _MYBATIS = ("org.apache.ibatis.", "org.mybatis.")
 _MAPPER_SCAN = re.compile(r"@MapperScan\s*\(([^)]*)\)")
 _QUOTED = re.compile(r'"([\w.]+)"')
+_MAPPER = re.compile(r"@Mapper\b")
+# A plain or package-qualified type; generics (``List<FooMapper>``) and arrays are not the receiver's type.
+_PLAIN_TYPE = re.compile(r"[\w.]+")
 _SKIP_SCOPES = frozenset({"class_body", "interface_body", "enum_body"})
 # Enhanced-for only: the shape measured on the Spring corpus. Counted ``for`` and
 # ``forEach`` lambdas over the same rows are the same cost; add them once measured.
@@ -87,7 +91,7 @@ def _in_package(path: str, packages: set[str]) -> bool:
 def _seed_interface(pf: Any, sym: Any, parents: list[str], packages: set[str]) -> bool:
     if any(p in _SPRING_DATA_BASES and _imported_from(pf, p, (_SPRING_DATA,)) for p in parents):
         return True
-    mapper = any(d.lstrip().startswith("@Mapper") and "@MapperScan" not in d for d in sym.decorators)
+    mapper = any(_MAPPER.search(d) for d in sym.decorators)
     if mapper and _imported_from(pf, "Mapper", _MYBATIS):
         return True
     return _in_package(pf.file_info.path, packages)
@@ -135,23 +139,30 @@ def _text(node: Node | None) -> str:
     return node.text.decode("utf-8", "replace") if node is not None and node.text else ""
 
 
-def _type_name(node: Node | None) -> str:
-    """``PmsSkuStockMapper`` from ``PmsSkuStockMapper`` / ``a.b.PmsSkuStockMapper``."""
-    if node is None or node.type not in ("type_identifier", "scoped_type_identifier"):
-        return ""
-    return _text(node).rsplit(".", 1)[-1]
+@cache
+def _declared_types() -> Any:
+    """The Java dataflow dialect's declared-type reader, with fields added: the
+    receiver is usually an injected field."""
+    from ..dataflow.dialects.base import DeclaredTypes  # deferred: dataflow imports perf
+
+    return DeclaredTypes(
+        frozenset({"formal_parameter", "local_variable_declaration", "field_declaration"}),
+        frozenset({"variable_declarator"}),
+    )
 
 
 def _declared(node: Node) -> list[tuple[str, str]]:
-    """``(name, simple type)`` for a field, local or parameter declaration."""
-    type_name = _type_name(node.child_by_field_name("type"))
+    """``(name, simple type)`` for each name a field, local or parameter declares."""
     if node.type == "formal_parameter":
-        return [(_text(node.child_by_field_name("name")), type_name)]
-    return [
-        (_text(d.child_by_field_name("name")), type_name)
-        for d in node.children
-        if d.type == "variable_declarator"
-    ]
+        names = [node.child_by_field_name("name")]
+    else:
+        names = [d.child_by_field_name("name") for d in node.children if d.type == "variable_declarator"]
+    out = []
+    for name in names:
+        typ = _declared_types().of(name) if name is not None else None
+        plain = typ is not None and _PLAIN_TYPE.fullmatch(typ)
+        out.append((_text(name), typ.rsplit(".", 1)[-1] if plain else ""))
+    return out
 
 
 def _class_fields(fn: Node) -> dict[str, str]:
@@ -186,8 +197,9 @@ def _receiver_name(call: Node) -> str:
     return ""
 
 
-def _loop_facts(call: Node, loop: Node, dialect: BasePerfDialect, probe: Any, lmap: Any) -> LoopFacts:
-    source = dialect.loop_source(loop, probe)
+def _loop_facts(
+    call: Node, loop: Node, source: LoopSource | None, dialect: BasePerfDialect, lmap: Any
+) -> LoopFacts:
     return LoopFacts(
         chunked=dialect.is_chunked_loop(loop),
         magnitude=source.magnitude if source is not None else "unknown",
@@ -220,7 +232,7 @@ def _loop_hits(
             PerfHit(
                 "io_in_loop", line, fn_name, "db",
                 func_start=fn.start_point[0] + 1,
-                loop=_loop_facts(call, loop, dialect, ctx["probe"], ctx["lmap"]),
+                loop=_loop_facts(call, loop, source, dialect, ctx["lmap"]),
                 loop_line=loop.start_point[0] + 1,
                 sink_call=_sink_call_text(call, method, dialect),
             )
@@ -245,6 +257,8 @@ def _file_hits(
 ) -> list[PerfHit]:
     from ..dataflow.parsing import parse_source  # deferred: dataflow imports perf
 
+    # The walker keeps no trees, so parse again, as lazy_load does; only files
+    # whose type references name a persistence type reach here.
     parsed = parse_source(pf.file_info.abs_path, "java", source)
     dialect = PERF_DIALECTS.get("java")
     if parsed is None or dialect is None:

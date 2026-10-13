@@ -210,3 +210,67 @@ def test_ambiguous_simple_name_is_dropped(tmp_path: Path):
     files["src/com/other/BrandMapper.java"] = "package com.other;\npublic class BrandMapper {}\n"
     parsed = [_parse(tmp_path, rel, src) for rel, src in files.items()]
     assert "BrandMapper" not in persistence_types(parsed)
+
+
+def test_update_scoring_only_the_caller_matches_a_full_run(tmp_path: Path):
+    # An update walks the changed caller only; the unchanged config and mapper
+    # still come in through parsed_files, so the result equals a full run.
+    _require_java()
+    parsed = [_parse(tmp_path, rel, src) for rel, src in _mybatis(_LOOP_SERVICE).items()]
+    full = {pf.file_info.path: FileComplexity(functions=[], classes=[]) for pf in parsed}
+    collect_lazy_loads([(pf, full[pf.file_info.path]) for pf in parsed], parsed)
+    service = next(pf for pf in parsed if pf.file_info.path == _SERVICE)
+    partial = FileComplexity(functions=[], classes=[])
+    collect_lazy_loads([(service, partial)], parsed)
+    assert partial.perf_hits == full[_SERVICE].perf_hits
+    assert [h.line for h in partial.perf_hits] == [7]
+
+
+def test_qualified_field_and_local_receivers_are_typed(tmp_path: Path):
+    hits = _hits(tmp_path, _mybatis("""
+        package com.shop.service;
+        public class BrandService {
+            private com.shop.mapper.BrandMapper brandMapper;
+            void f(java.util.List<Brand> rows) {
+                for (Brand b : rows) { brandMapper.insert(b); }
+            }
+            void g(java.util.List<Brand> rows) {
+                com.shop.mapper.BrandMapper local = brandMapper;
+                for (Brand b : rows) { local.insert(b); }
+            }
+        }
+    """), _SERVICE)
+    assert sorted((h.line, h.function) for h in hits) == [(6, "f"), (10, "g")]
+
+
+def test_collection_of_mappers_is_not_a_mapper(tmp_path: Path):
+    hits = _hits(tmp_path, _mybatis("""
+        package com.shop.service;
+        import com.shop.mapper.BrandMapper;
+        public class BrandService {
+            private java.util.List<BrandMapper> brandMapper;
+            void f(java.util.List<Brand> rows) {
+                for (Brand b : rows) { brandMapper.add(null); }
+            }
+        }
+    """), _SERVICE)
+    assert hits == []
+
+
+def test_java_rows_are_held_back_and_counted_not_dropped(tmp_path: Path):
+    from repowise.core.analysis.finding_registry import split_gated
+    from repowise.core.analysis.health.biomarkers.base import FileContext
+    from repowise.core.analysis.health.biomarkers.io_in_loop import BIOMARKER
+
+    hits = _hits(tmp_path, _mybatis(_LOOP_SERVICE), _SERVICE)
+    ctx = FileContext(file_path=_SERVICE, language="java", nloc=8, has_test_file=False,
+                      module=None, perf_hits=hits)
+    rows = [{"file_path": _SERVICE, "biomarker_type": r.biomarker_type}
+            for r in BIOMARKER.detect(ctx)]
+    assert len(rows) == 1
+    for layer in ("health", "performance"):
+        shown, held = split_gated(layer, rows, kind="biomarker_type", get=dict.get)
+        assert shown == [] and held["java"]["count"] == 1
+        shown, held = split_gated(layer, rows, kind="biomarker_type", get=dict.get,
+                                  include_unverified=True)
+        assert shown == rows and held == {}
