@@ -219,20 +219,28 @@ def pair_overloads(declared: list[Symbol], defined: list[Symbol]) -> dict[str, s
     The count alone pairs only where each side has one unpaired member of it,
     which covers a type spelled two ways (``size_t`` and ``unsigned long``).
     """
-    by_key: dict[str | None, dict[str, str]] = {}
+    by_key: dict[str | None, dict[str, str]] = defaultdict(dict)
     for symbol in defined:
-        by_key.setdefault(_parameter_count(symbol), {}).setdefault(_parameter_types(symbol), symbol.id)
+        by_key[_parameter_count(symbol)].setdefault(_parameter_types(symbol), symbol.id)
     pairs: dict[str, str] = {}
     left: dict[str | None, list[Symbol]] = defaultdict(list)
     for symbol in declared:
-        target = by_key.get(_parameter_count(symbol), {}).get(_parameter_types(symbol))
+        target = by_key[_parameter_count(symbol)].get(_parameter_types(symbol))
         if target is None:
             left[_parameter_count(symbol)].append(symbol)
         else:
             pairs[symbol.id] = target
-    taken = set(pairs.values())
+    pairs.update(_pair_by_count(left, by_key, set(pairs.values())))
+    return pairs
+
+
+def _pair_by_count(
+    left: dict[str | None, list[Symbol]], by_key: dict[str | None, dict[str, str]], taken: set[str]
+) -> dict[str, str]:
+    """Pair a count each side has exactly one unpaired member of."""
+    pairs: dict[str, str] = {}
     for count, members in left.items():
-        free = {sid for sid in by_key.get(count, {}).values() if sid not in taken}
+        free = set(by_key.get(count, {}).values()) - taken
         if count is not None and len(members) == 1 and len(free) == 1:
             pairs[members[0].id] = free.pop()
     return pairs

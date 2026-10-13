@@ -631,21 +631,32 @@ class CallResolver(LanguageStrategiesMixin, ReceiverTypingMixin):
                 [symbols[member] for member, _ in declared_members],
                 [symbols[member] for member, _ in defined_members] or [symbols[defined]],
             )
-            floors: dict[str, int] = {}
-            for member, (fewest, _most) in declared_members:
-                target = pairs.get(member)
-                if target is not None:
-                    self._decl_to_def[member] = target
-                    floors[target] = min(fewest, floors.get(target, fewest))
+            for member, target in pairs.items():
+                self._decl_to_def[member] = target
             # The representative was linked by name alone; a definition its own
             # signature does not reach belongs to another member.
             if pairs and declared not in pairs:
                 del self._decl_to_def[declared]
-            if floors and defined_members:
-                self._overload_members[defined] = tuple(
-                    (member, (min(fewest, floors.get(member, fewest)), most))
-                    for member, (fewest, most) in defined_members
-                )
+            if defined_members:
+                self._carry_declared_floors(defined, declared_members, pairs)
+
+    def _carry_declared_floors(
+        self,
+        defined: str,
+        declared_members: tuple[tuple[str, tuple[int, int | None]], ...],
+        pairs: dict[str, str],
+    ) -> None:
+        """Lower each paired definition's fewest arguments to its declaration's."""
+        floors: dict[str, int] = {}
+        for member, (fewest, _most) in declared_members:
+            target = pairs.get(member)
+            if target is not None:
+                floors[target] = min(fewest, floors.get(target, fewest))
+        if floors:
+            self._overload_members[defined] = tuple(
+                (member, (min(fewest, floors.get(member, fewest)), most))
+                for member, (fewest, most) in self._overload_members[defined]
+            )
 
     def _index_extension_methods(
         self, candidates: dict[tuple[str, str], set[tuple[str, str]]]
