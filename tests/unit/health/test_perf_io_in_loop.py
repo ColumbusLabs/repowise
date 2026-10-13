@@ -535,6 +535,24 @@ def test_string_concat_not_reported_in_test_files(path, expected):
     assert len(StringConcatInLoopDetector().detect(ctx)) == expected
 
 
+def test_string_concat_one_finding_per_loop_and_string():
+    """A loop's appends to one string are one edit, so one finding on the first."""
+    ctx = _ctx(
+        [
+            PerfHit("string_concat_in_loop", 9, "f", "", 3, loop_line=7, subject="out"),
+            PerfHit("string_concat_in_loop", 8, "f", "", 3, loop_line=7, subject="out"),
+            PerfHit("string_concat_in_loop", 12, "f", "", 3, loop_line=7, subject="out"),
+            # Another string in the same loop, and the same string in another loop.
+            PerfHit("string_concat_in_loop", 10, "f", "", 3, loop_line=7, subject="log"),
+            PerfHit("string_concat_in_loop", 15, "f", "", 3, loop_line=14, subject="out"),
+        ]
+    )
+    findings = sorted(StringConcatInLoopDetector().detect(ctx), key=lambda f: f.line_start)
+    assert [(f.line_start, f.line_end) for f in findings] == [(8, 12), (10, 10), (15, 15)]
+    assert findings[0].details["lines"] == [8, 9, 12]
+    assert "lines" not in findings[1].details
+
+
 def test_no_perf_hits_yields_no_findings():
     assert IoInLoopDetector().detect(_ctx([])) == []
 

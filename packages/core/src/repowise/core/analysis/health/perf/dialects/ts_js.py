@@ -70,14 +70,6 @@ TS_SINK_METHODS: frozenset[str] = (
     )
 )
 
-_TS_STRING_KINDS: frozenset[str] = frozenset({"string", "template_string"})
-_TS_AUG_ASSIGN_KINDS: frozenset[str] = frozenset({"augmented_assignment_expression"})
-# The walker's TS/JS loop kinds (``complexity.languages``), which cannot be
-# imported here without a cycle through the complexity package.
-_TS_LOOP_KINDS: frozenset[str] = frozenset(
-    {"for_statement", "for_in_statement", "for_of_statement", "while_statement", "do_statement"}
-)
-
 # A function/lambda scope: the boundary for the reaching-assignment walk and the
 # "not a loop exit" skip for break/return/throw inside a nested closure (a
 # callback's own ``return`` doesn't exit the loop).
@@ -288,23 +280,14 @@ def _sole_where_pair(call: Node) -> tuple[Node, Node] | None:
     return (key, value) if key is not None and value is not None else None
 
 
-def _assigned_value(node: Node, name: bytes) -> Node | None:
-    """The value *node* binds to the bare identifier *name*, if it is such a binding."""
-    fields = _ASSIGNMENT_FIELDS.get(node.type)
-    if fields is None:
-        return None
-    target, value = (node.child_by_field_name(field) for field in fields)
-    if target is None or target.type != "identifier" or target.text != name:
-        return None
-    return value
-
-
 class TsJsPerfDialect(TsJsMarkerHooks, IterableSources):
     language = "typescript"
     markers = frozenset(
         {
             "io_in_loop",
-            "string_concat_in_loop",
+            # No ``string_concat_in_loop``: every major JS engine (V8, SpiderMonkey,
+            # JavaScriptCore) concatenates through ropes, so ``s += x`` in a loop
+            # is linear and is the idiom, not the problem (as Rust's ``push_str``).
             "resource_construction_in_loop",
             "serial_await_in_loop",
             "membership_test_against_list_in_loop",
@@ -318,8 +301,6 @@ class TsJsPerfDialect(TsJsMarkerHooks, IterableSources):
         }
     )
 
-    string_literal_kinds = _TS_STRING_KINDS
-    aug_assign_kinds = _TS_AUG_ASSIGN_KINDS
     switch_kinds = frozenset({"switch_statement"})
     # Node's ``child_process`` launchers return a ChildProcess at once and report
     # through callbacks or events; only their ``*Sync`` forms wait for the child.
@@ -327,28 +308,6 @@ class TsJsPerfDialect(TsJsMarkerHooks, IterableSources):
     # cost) but are not blocking calls. Ceiling: shelljs's synchronous ``exec``
     # is excluded with them, a recall loss only.
     hot_path_excluded_methods = frozenset({"spawn", "exec", "execFile"})
-
-    def is_string_concat(self, node: Node) -> bool:
-        """``s += "x"`` that can grow ``s`` across loop iterations.
-
-        A ``let`` declared or freshly assigned inside the loop body is bounded
-        per pass, and an append right before ``break`` / ``return`` / ``throw``
-        runs once. A member or subscript target (``buf[0] += ...``) keeps the
-        flag: nothing here re-binds it.
-        """
-        if not super().is_string_concat(node):
-            return False
-        left = node.child_by_field_name("left")
-        if left is None or left.type != "identifier" or left.text is None:
-            return True
-        return self.accumulates_across_iterations(node, left.text, _TS_LOOP_KINDS)
-
-    def binds_name(self, node: Node, name: bytes) -> bool:
-        # ``s = s + part`` keeps accumulating; only a value not built from ``s`` resets it.
-        value = _assigned_value(node, name)
-        return value is not None and not any(
-            n.type == "identifier" and n.text == name for n in self._walk(value)
-        )
 
     # Only ``for ... of`` / ``for ... in`` multiply over a collection. C-style
     # ``for (;;)``, ``while`` and ``do`` are cursors (pagination / polling), so
