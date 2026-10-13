@@ -548,9 +548,24 @@ def test_string_concat_one_finding_per_loop_and_string():
         ]
     )
     findings = sorted(StringConcatInLoopDetector().detect(ctx), key=lambda f: f.line_start)
-    assert [(f.line_start, f.line_end) for f in findings] == [(8, 12), (10, 10), (15, 15)]
+    # ``line_end`` stays on the first append, so an unanchored row's id is stable.
+    assert [(f.line_start, f.line_end) for f in findings] == [(8, 8), (10, 10), (15, 15)]
     assert findings[0].details["lines"] == [8, 9, 12]
     assert "lines" not in findings[1].details
+
+
+def test_string_concat_unnamed_targets_in_one_loop_stay_apart():
+    """``buf[0] +=`` and ``other[i] +=`` keep no name, so nothing says they are one string."""
+    ctx = _ctx(
+        [
+            PerfHit("string_concat_in_loop", 8, "f", "", 3, loop_line=7),
+            PerfHit("string_concat_in_loop", 9, "f", "", 3, loop_line=7),
+            PerfHit("string_concat_in_loop", 10, "f", "", 3, loop_line=7, subject="self.a"),
+            PerfHit("string_concat_in_loop", 11, "f", "", 3, loop_line=7, subject="self.b"),
+        ]
+    )
+    findings = StringConcatInLoopDetector().detect(ctx)
+    assert sorted(f.line_start for f in findings) == [8, 9, 10, 11]
 
 
 def test_no_perf_hits_yields_no_findings():

@@ -11,8 +11,8 @@ never an opaque ``s += chunk`` that could be numeric. This detector lifts the
 pre-collected hits into findings, except in test files: a test or benchmark that
 builds its expected text or input data with ``+=`` is not code anyone speeds up.
 
-One loop's appends to one string are one edit, so they are one finding: it sits
-on the first append and lists every appended line in ``details["lines"]``.
+One loop's appends to one named string are one edit, so they are one finding:
+it sits on the first append and lists every appended line in ``details["lines"]``.
 """
 
 from __future__ import annotations
@@ -32,10 +32,13 @@ class StringConcatInLoopDetector:
     def detect(self, ctx: FileContext) -> list[BiomarkerResult]:
         if is_test_file(ctx.file_path):
             return []
-        groups: dict[tuple[str | None, int, int, str], list[PerfHit]] = {}
+        groups: dict[tuple[str | None, int, int, str | int], list[PerfHit]] = {}
         for hit in ctx.perf_hits:
             if hit.kind == _KIND:
-                key = (hit.function, hit.func_start, hit.loop_line or hit.line, hit.subject)
+                # A target with no quotable name (``buf[i] +=``) is not shown to
+                # be the same string as another one, so it keeps its own row.
+                target = hit.subject or hit.line
+                key = (hit.function, hit.func_start, hit.loop_line or hit.line, target)
                 groups.setdefault(key, []).append(hit)
         return [self._finding(sorted(hits, key=lambda h: h.line)) for hits in groups.values()]
 
@@ -49,7 +52,9 @@ class StringConcatInLoopDetector:
             severity=Severity.LOW,
             function_name=first.function,
             line_start=first.line,
-            line_end=hits[-1].line,
+            # The first line only: a row with no enclosing symbol is identified
+            # by its absolute lines, and the merged lines are in ``lines``.
+            line_end=first.line,
             details=details,
             reason="string built by += in a loop; use a buffer / join for linear cost",
         )
