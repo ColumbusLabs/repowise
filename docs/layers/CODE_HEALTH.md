@@ -97,7 +97,8 @@ duplicated code when part of it is a copy.
 
 Left out, and counted with a reason:
 
-- test files, tooling, generated and vendored code, docs and examples
+- test files, tooling (including Dart's `tool/` scripts), generated and vendored code,
+  docs and examples
 - files whose only findings come from git history
 - changes that would recover under half a point, and items with no concrete first
   edit

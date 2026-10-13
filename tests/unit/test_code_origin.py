@@ -71,6 +71,13 @@ _OWN_HEADER = (
         ("scripts/release.py", "tooling"),
         (".github/scripts/label.js", "tooling"),
         ("tools/gen.go", "tooling"),
+        # Dart's ``tool/`` (flutter samples' CI scripts), but not a shipped one.
+        ("tool/ci_script.dart", "tooling"),
+        ("desktop_photo_search/material/tool/grind.dart", "tooling"),
+        ("lib/src/tool/picker.dart", "production"),
+        ("packages/app/lib/tool/picker.dart", "production"),
+        ("src/cmd/go/internal/tool/tool.go", "production"),
+        ("tool/release.py", "production"),
         ("benchmarks/bench_app.py", "tooling"),
         ("app/migrations/0001_initial.py", "tooling"),
         ("db/alembic/versions/abc_add.py", "tooling"),

@@ -624,6 +624,12 @@ _TOOLING_STEM_SUFFIXES = ("_benchmark", "_benchmarks")
 _TOOLING_NAME_RE = re.compile(
     r"^(?:eslint\.config|jest\.config|vitest\.config|babel\.config|karma\.conf)\.[cm]?[jt]s$"
 )
+# Dart's package layout keeps private scripts in ``tool/`` beside ``lib/``. A bare
+# ``tool`` is shipped code elsewhere (Go's ``internal/tool``), so it counts only
+# for Dart files, and not once it sits under a package's shipped ``lib``/``bin``/
+# ``web``. Ceiling: path-only, so a ``tool/`` not at a package root also counts.
+_DART_TOOL_DIR = "tool"
+_DART_SHIPPED_DIRS = frozenset({"lib", "bin", "web"})
 
 
 def _header_text(text: str | bytes | None) -> str:
@@ -688,7 +694,14 @@ def _is_tooling(name: str, dirs: list[str]) -> bool:
         or (not dirs and name in _TOOLING_ROOT_NAMES)
         or bool(_TOOLING_NAME_RE.match(name.lower()))
         or _is_benchmark_file(name)
+        or _is_dart_tool(name, dirs)
     )
+
+
+def _is_dart_tool(name: str, dirs: list[str]) -> bool:
+    if not name.lower().endswith(".dart") or _DART_TOOL_DIR not in dirs:
+        return False
+    return _DART_SHIPPED_DIRS.isdisjoint(dirs[: dirs.index(_DART_TOOL_DIR)])
 
 
 def _is_benchmark_file(name: str) -> bool:
