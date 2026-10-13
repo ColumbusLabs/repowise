@@ -273,6 +273,22 @@ _MEMBERSHIP_CASES = [
             "load(big);",
         )
     ),
+    *(
+        (
+            "typescript",
+            f"const big = ['a', 'b'];\n{fn}",
+            [("membership_test_against_list_in_loop", "")],
+            f"a table name the file binds again may be another array: {fn}",
+        )
+        for fn in (
+            "function f(big, ys){ for (const y of ys){ if (big.includes(y)) use(y); } }",
+            "function f(ys){ let big = load(); for (const y of ys){ if (big.includes(y)) use(y); } }",
+            "function f(ys){ try { g() } catch (big) {} "
+            "for (const y of ys){ if (big.includes(y)) use(y); } }",
+            "const f = ({ big }, ys) => { for (const y of ys){ if (big.includes(y)) use(y); } }",
+            "const f = big => { for (const y of ys){ if (big.includes(y)) use(y); } }",
+        )
+    ),
     (
         "typescript",
         "let big = ['a', 'b'];\n"

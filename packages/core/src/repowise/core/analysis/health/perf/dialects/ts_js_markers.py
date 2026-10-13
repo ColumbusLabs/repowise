@@ -3,6 +3,7 @@ and client construction inside a loop."""
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
@@ -174,6 +175,34 @@ def _changed_arrays(node: Node) -> list[str]:
     return names
 
 
+# Nodes that bind the names under them (or under the named field).
+_BINDING_FIELDS: dict[str, str | None] = {
+    "variable_declarator": "name",
+    "formal_parameters": None,
+    "catch_clause": "parameter",
+    "arrow_function": "parameter",
+}
+
+
+def _declared_names(node: Node) -> list[str]:
+    """Identifiers *node* declares: a variable (plain or destructured), a
+    parameter list, a catch binding or a bare arrow parameter. A default value
+    inside a parameter list over-counts, which only keeps a table unfixed."""
+    if node.type not in _BINDING_FIELDS:
+        return []
+    field = _BINDING_FIELDS[node.type]
+    target = node.child_by_field_name(field) if field else node
+    if target is None:
+        return []
+    stack, names = [target], []
+    while stack:
+        cur = stack.pop()
+        if cur.type in ("identifier", "shorthand_property_identifier_pattern"):
+            names.extend(n for n in (node_text(cur),) if n)
+        stack.extend(cur.children)
+    return names
+
+
 class TsJsMarkerHooks(BasePerfDialect):
     def loop_call_marker(
         self, root: str, method: str, node: Node, list_names: frozenset[str]
@@ -217,7 +246,9 @@ class TsJsMarkerHooks(BasePerfDialect):
         names: set[str] = set()
         fixed: set[str] = set()
         changed: set[str] = set()
+        declared: Counter[str] = Counter()
         for n in self._walk(root):
+            declared.update(_declared_names(n))
             if n.type == "call_expression" or n.type in _ASSIGN_KINDS:
                 changed.update(_changed_arrays(n))
                 continue
@@ -227,4 +258,7 @@ class TsJsMarkerHooks(BasePerfDialect):
             value = n.child_by_field_name("value")
             if name is not None and value is not None and value.type == "array":
                 (fixed if _is_fixed_table(n, value) else names).add(name)
-        return frozenset(names | (fixed & changed))
+        # A name the file binds again (a parameter, a local) may not be the table
+        # at a given probe; scope is not resolved, so such a table is not fixed.
+        reused = {name for name in fixed if declared[name] > 1}
+        return frozenset(names | (fixed & (changed | reused)))

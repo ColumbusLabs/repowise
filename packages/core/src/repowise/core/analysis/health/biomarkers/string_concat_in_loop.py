@@ -33,11 +33,11 @@ class StringConcatInLoopDetector:
         if is_test_file(ctx.file_path):
             return []
         groups: dict[tuple[str | None, int, int, str | int], list[PerfHit]] = {}
-        for hit in ctx.perf_hits:
+        for index, hit in enumerate(ctx.perf_hits):
             if hit.kind == _KIND:
                 # A target with no quotable name (``buf[i] +=``) is not shown to
                 # be the same string as another one, so it keeps its own row.
-                target = hit.subject or hit.line
+                target = hit.subject or index
                 key = (hit.function, hit.func_start, hit.loop_line or hit.line, target)
                 groups.setdefault(key, []).append(hit)
         return [self._finding(sorted(hits, key=lambda h: h.line)) for hits in groups.values()]

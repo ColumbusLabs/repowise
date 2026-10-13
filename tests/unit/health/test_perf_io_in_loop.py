@@ -568,6 +568,17 @@ def test_string_concat_unnamed_targets_in_one_loop_stay_apart():
     assert sorted(f.line_start for f in findings) == [8, 9, 10, 11]
 
 
+def test_string_concat_unnamed_targets_on_one_line_stay_apart():
+    """``a[0] += x; b[0] += y`` on one line: two unnamed targets, two findings."""
+    ctx = _ctx(
+        [
+            PerfHit("string_concat_in_loop", 8, "f", "", 3, loop_line=7),
+            PerfHit("string_concat_in_loop", 8, "f", "", 3, loop_line=7),
+        ]
+    )
+    assert len(StringConcatInLoopDetector().detect(ctx)) == 2
+
+
 def test_no_perf_hits_yields_no_findings():
     assert IoInLoopDetector().detect(_ctx([])) == []
 
