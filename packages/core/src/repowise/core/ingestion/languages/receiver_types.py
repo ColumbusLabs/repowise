@@ -482,6 +482,47 @@ def _python_target_bindings(cleaned: str) -> set[tuple[int, str]]:
 BINDING_LANGUAGES = frozenset({"javascript", "python", "typescript"})
 _BINDING_SCAN_AS = {"javascript": "typescript"}
 
+# Names a body binds whatever their type: an untyped local, a loop variable, a
+# lambda or closure parameter. The scan sees only some of them, so these never
+# prove a name unbound; they only refuse a field of the same name, which class
+# scope would otherwise answer for (`{ api -> api.m() }` is not the field).
+# `(named, listed)` shapes; a lambda's list stays on its opening line.
+_JAVA_LAMBDA = (
+    re.compile(r"(?<![\w.])var\s+(?P<name>[a-z_]\w*)"),
+    re.compile(r"(?<![\w.])(?P<name>[a-z_]\w*)\s*->"),
+), (re.compile(r"\((?P<lhs>[\w\s,]*)\)\s*->"),)
+_LOCAL_NAME_SHAPES: dict[str, tuple[tuple[re.Pattern[str], ...], ...]] = {
+    "csharp": (
+        (
+            re.compile(r"(?<![\w.])var\s+(?P<name>[a-z_]\w*)"),
+            re.compile(r"(?<![\w.])(?P<name>[a-z_]\w*)\s*=>"),
+        ),
+        (re.compile(r"\((?P<lhs>[\w\s,]*)\)\s*=>"),),
+    ),
+    "java": _JAVA_LAMBDA,
+    "kotlin": (
+        (
+            re.compile(r"(?<![\w.])va[lr]\s+(?P<name>[a-z_]\w*)"),
+            re.compile(r"\bfor\s*\(\s*(?P<name>[a-z_]\w*)\s+in\b"),
+        ),
+        (re.compile(r"\{[ \t]*(?P<lhs>[\w \t,:?()]*?)->"),),
+    ),
+    "swift": (
+        # `guard let client else` and `if let client = self.client {` unwrap
+        # the field itself, so the name keeps the field's type.
+        (
+            re.compile(
+                r"(?<![\w.])(?:let|var)\s+(?P<name>[a-z_]\w*)\b"
+                r"(?!\s*(?:=\s*(?:self\.)?(?P=name)\s*)?(?:[,{]|else\b))"
+            ),
+        ),
+        (
+            re.compile(r"\{[ \t]*(?:\[[^\]\n]*\][ \t]*)?(?P<lhs>[\w \t,:?()]*?)[ \t]+in\b"),
+            re.compile(r"\bfor\s+(?:case\s+(?:let\s+)?)?(?P<lhs>\([^()\n]*\)|[a-z_]\w*)\s+in\b"),
+        ),
+    ),
+}
+
 
 def scan_bindings(text: str, language: str) -> tuple[tuple[int, str], ...]:
     """Every ``(line, name)`` *text* binds, in line order."""
@@ -494,12 +535,15 @@ def scan_binding_positions(text: str, language: str) -> tuple[tuple[int, int, st
     Ceiling: a block comment earlier on the same line shifts the column, since
     comments are blanked without keeping their width.
     """
-    if language not in BINDING_LANGUAGES:
+    local = _LOCAL_NAME_SHAPES.get(language)
+    if language not in BINDING_LANGUAGES and local is None:
         return ()
     language = _BINDING_SCAN_AS.get(language, language)
     cleaned = _without_comments(text, language)
     starts = [0, *(newline.end() for newline in _NEWLINE.finditer(cleaned))]
-    if language == "typescript":
+    if local is not None:
+        found = _named_bindings(local[0], cleaned) | _listed_bindings(local[1], _PY_NAME, cleaned)
+    elif language == "typescript":
         found = _named_bindings(_TS_BINDINGS, cleaned)
         found |= _listed_bindings(_TS_TARGET_LISTS, _TS_IDENTIFIER, cleaned)
     else:

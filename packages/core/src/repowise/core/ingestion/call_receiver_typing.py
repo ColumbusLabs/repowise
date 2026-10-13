@@ -372,7 +372,9 @@ class ReceiverTypingMixin:
         A local shadows a field, so the body answers first and its answer
         stands — including when that answer is "declared twice, no usable
         type". Only a name the body never mentions reaches class scope, and
-        only a name neither binds reaches module scope.
+        only a name neither binds reaches module scope. A name the body binds
+        with no type it can read (`{ api -> api.m() }`) is still a local, so it
+        refuses the field too.
         """
         body_types = self._declared_types_in(file_path, caller_id, language)
         # A builtin type answers only when nothing else does, so a local
@@ -387,7 +389,9 @@ class ReceiverTypingMixin:
             fields = self._field_types_in(file_path, language).get(class_id, {})
             field = fields.get(receiver_name)
             if receiver_name in fields and not (builtin_local and external_type_name(field)):
-                return field, "field"
+                bound = self._bound_names_in(file_path, caller_id, language)
+                if builtin_local or receiver_name not in bound:
+                    return field, "field"
         if builtin_local:
             return declared, "body"
         # Third scope: a module-level def a framework decorator turned into an

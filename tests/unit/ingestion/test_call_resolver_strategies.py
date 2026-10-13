@@ -465,6 +465,79 @@ class TestFieldTypedReceiver:
         for callee in ("Api.swift::Api::fetch", "Api.swift::Dao::read"):
             assert ("Repo.swift::Repo::load", callee, 0.75, "receiver_field_global") in edges
 
+    @pytest.mark.parametrize(
+        ("rel", "lang", "source", "method"),
+        [
+            (
+                "Repo.kt",
+                "kotlin",
+                "class Repo(private val api: Api) {\n"
+                "    fun a() { api.nothing() }\n"
+                "    fun b(items: List<X>) { items.forEach { api -> api.nothing() } }\n"
+                "    fun c() { val api = make()\n        api.nothing() }\n}\n"
+                "class Api { fun nothing() {} }\n",
+                "nothing",
+            ),
+            (
+                "Repo.swift",
+                "swift",
+                "final class Repo {\n    private let api: Api\n"
+                "    func a() { api.nothing() }\n"
+                "    func b(items: [X]) { items.forEach { api in api.nothing() } }\n"
+                "    func c() { let api = make()\n        api.nothing() }\n}\n"
+                "final class Api { func nothing() {} }\n",
+                "nothing",
+            ),
+            (
+                "Repo.java",
+                "java",
+                "class Repo {\n    private final Api api = new Api();\n"
+                "    void a() { api.nothing(); }\n"
+                "    void b(List<X> items) { items.forEach(api -> api.nothing()); }\n"
+                "    void c() { var api = make(); api.nothing(); }\n}\n"
+                "class Api { void nothing() {} }\n",
+                "nothing",
+            ),
+            (
+                "Repo.cs",
+                "csharp",
+                "class Repo {\n    private readonly Api api;\n"
+                "    void A() { api.Nothing(); }\n"
+                "    void B(List<X> items) { items.ForEach(api => api.Nothing()); }\n"
+                "    void C() { var api = Make(); api.Nothing(); }\n}\n"
+                "class Api { public void Nothing() {} }\n",
+                "Nothing",
+            ),
+        ],
+    )
+    def test_an_untyped_local_or_lambda_parameter_shadows_the_field(
+        self, tmp_path: Path, rel: str, lang: str, source: str, method: str
+    ) -> None:
+        """`{ api -> api.m() }` names the lambda's parameter, not the field.
+
+        Only the field origin is asserted: Java's same-file name tier still
+        binds `api.nothing()` by name alone, which is not this scope's doing.
+        """
+        edges = _edges(_parse_all(tmp_path, {rel: (lang, source)}), tmp_path)
+        callers = {
+            e[0].rsplit("::", 1)[-1]
+            for e in edges
+            if e[1] == f"{rel}::Api::{method}" and e[3].startswith("receiver_field_")
+        }
+        assert callers == {"a" if lang != "csharp" else "A"}
+
+    def test_a_swift_optional_binding_of_the_field_keeps_it(self, tmp_path: Path) -> None:
+        """`guard let client else` unwraps the field itself, not a new local."""
+        source = (
+            "final class Repo {\n    var client: Api?\n"
+            "    func a() { guard let client else { return }\n        client.nothing() }\n"
+            "    func b() { if let client = self.client { client.nothing() } }\n}\n"
+            "final class Api { func nothing() {} }\n"
+        )
+        edges = _edges(_parse_all(tmp_path, {"Repo.swift": ("swift", source)}), tmp_path)
+        callers = {e[0] for e in edges if e[3].startswith("receiver_field_")}
+        assert callers == {"Repo.swift::Repo::a", "Repo.swift::Repo::b"}
+
     def test_a_nested_class_field_types_its_receiver(self, tmp_path: Path) -> None:
         """A nested class's id carries its outer class; its methods' ids do not."""
         parsed = _parse_all(
