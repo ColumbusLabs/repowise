@@ -89,6 +89,48 @@ _PRISMA_BULK_FORMS: dict[str, str] = {
 _LIMITER_NAME_RE = re.compile(r"(?i)(sem|semaphore|limiter|limit|mutex)$")
 _LIMITER_METHODS: frozenset[str] = frozenset({"runExclusive", "schedule"})
 
+# ESLint's rule for an ``await`` inside a loop, and its directive comments:
+# ``// eslint-disable-next-line no-await-in-loop -- why`` and friends.
+_AWAIT_IN_LOOP_RULE = "no-await-in-loop"
+_ESLINT_DIRECTIVE_RE = re.compile(
+    rb"(?://|/\*)[ \t]*eslint-(disable-next-line|disable-line|disable|enable)\b([^\r\n]*)"
+)
+
+
+def _directive_rules(tail: bytes) -> set[str]:
+    """Rule names a directive lists, its ``-- reason`` and comment end dropped."""
+    text = tail.decode("utf-8", "replace").split("*/")[0].split("--")[0]
+    return {rule.strip() for rule in text.split(",") if rule.strip()}
+
+
+def _eslint_allowed_lines(source: bytes, rule: str) -> frozenset[int]:
+    """1-indexed lines an ESLint directive naming *rule* switches it off on.
+
+    A directive with no rule list switches off every rule; it says nothing about
+    this one in particular, so it does not count.
+    """
+    lines: set[int] = set()
+    opened: int | None = None
+    for match in _ESLINT_DIRECTIVE_RE.finditer(source):
+        kind = match.group(1)
+        rules = _directive_rules(match.group(2))
+        line = source.count(b"\n", 0, match.start()) + 1
+        if kind == b"enable":
+            if opened is not None and (not rules or rule in rules):
+                lines.update(range(opened, line + 1))
+                opened = None
+        elif rule not in rules:
+            continue
+        elif kind == b"disable-next-line":
+            lines.add(line + 1)
+        elif kind == b"disable-line":
+            lines.add(line)
+        elif opened is None:
+            opened = line
+    if opened is not None:
+        lines.update(range(opened, source.count(b"\n") + 2))
+    return frozenset(lines)
+
 _ASSIGNMENT_FIELDS: dict[str, tuple[str, str]] = {
     "variable_declarator": ("name", "value"),
     "assignment_expression": ("left", "right"),
@@ -313,6 +355,11 @@ class TsJsPerfDialect(TsJsMarkerHooks, IterableSources):
     # ``for (;;)``, ``while`` and ``do`` are cursors (pagination / polling), so
     # they do not make an inner sink a nested O(n*m) round-trip.
     _ITERATION_LOOP_KINDS: frozenset[str] = frozenset({"for_in_statement", "for_of_statement"})
+
+    def awaits_in_loop_allowed(self, source: bytes) -> frozenset[int]:
+        if _AWAIT_IN_LOOP_RULE.encode() not in source:
+            return frozenset()
+        return _eslint_allowed_lines(source, _AWAIT_IN_LOOP_RULE)
 
     def is_iteration_loop(self, node: Node) -> bool:
         return node.type in self._ITERATION_LOOP_KINDS

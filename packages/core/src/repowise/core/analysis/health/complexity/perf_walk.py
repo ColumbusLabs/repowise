@@ -542,6 +542,9 @@ def _collect_perf_hits(
     do_loop_facts = do_chunked or do_magnitude or do_batch or do_bound
 
     do_in_place = _overrides(dialect, "runs_in_place")
+    # An awaited call on a line whose lint suppression says awaiting in this loop
+    # is intended (a retry or a stream read) is not a per-iteration finding.
+    awaits_allowed = dialect.awaits_in_loop_allowed(root.text or b"")
 
     def probe(call: Node) -> str | None:
         return dialect.call_sink_kind(
@@ -770,7 +773,9 @@ def _collect_perf_hits(
                 # speaks for it.
                 pass
             elif kind is not None:
-                if loop_depth >= 1:
+                if loop_depth >= 1 and chain_awaited and line in awaits_allowed:
+                    pass
+                elif loop_depth >= 1:
                     # The loop's key may feed any link, so the chain's facts are
                     # read off its outermost call, which holds them all.
                     facts = loop_facts(chain_top, sink=True, per_call=True)
@@ -865,7 +870,7 @@ def _collect_perf_hits(
                                 subject=root_name if marker == _MEMBERSHIP else "",
                             )
                         )
-                    elif method:
+                    elif method and not (awaited and line in awaits_allowed):
                         # A loop-nested call to a non-sink helper: a candidate
                         # entry for cross-function reachability (PR4). Keep the
                         # first line we see the helper called at, for the finding.

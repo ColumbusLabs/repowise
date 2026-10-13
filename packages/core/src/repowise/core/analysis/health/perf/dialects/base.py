@@ -776,6 +776,11 @@ class BasePerfDialect:
         """
         return frozenset()
 
+    def awaits_in_loop_allowed(self, source: bytes) -> frozenset[int]:
+        """1-indexed lines where the source states that awaiting inside a loop is
+        intended (a lint suppression naming that rule). Default: none."""
+        return frozenset()
+
     def async_blocking_member(self, node: Node) -> str | None:
         """The offending name if *node* is a non-call member read that blocks
         the event loop inside an async function (C# ``task.Result``), else
