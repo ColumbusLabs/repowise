@@ -681,10 +681,13 @@ def _verify_revision(subject: _Subject) -> None:
         )
         if probe.returncode == 0:
             detail = f"{revspec!r} does not name a commit"
-        else:
+        elif "unknown revision" in probe.stderr:
             detail = _git_error_detail(
                 subprocess.CalledProcessError(probe.returncode, probe.args, stderr=probe.stderr)
             )
+        else:
+            # Not a repository, or some other git failure: the scorer reports it.
+            return
         cannot_evaluate(
             subject.fmt,
             "change_unreadable",
