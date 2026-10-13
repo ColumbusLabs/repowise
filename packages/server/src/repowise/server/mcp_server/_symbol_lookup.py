@@ -19,7 +19,11 @@ from __future__ import annotations
 
 from sqlalchemy import or_, select
 
-from repowise.core.ingestion.symbol_identity import base_symbol_id, id_segment_name
+from repowise.core.ingestion.symbol_identity import (
+    base_symbol_id,
+    id_segment_name,
+    untyped_symbol_id,
+)
 from repowise.core.persistence.models import WikiSymbol
 from repowise.core.persistence.sql import LIKE_ESCAPE, escape_like
 from repowise.core.support_paths import is_support_path
@@ -204,7 +208,9 @@ async def resolve_symbol_rows(session, repo_id: str, symbol_id: str) -> list[Wik
     # 1. Exact symbol_id — try every separator variant. The same query also
     #    reads the members of an overload set the id names, which carry a
     #    discriminator (``Validate.java::Validate::notNull`` -> ``notNull#1``,
-    #    ``notNull#2``); they answer only when no row matches exactly.
+    #    ``notNull#2``); they answer only when no row matches exactly. A
+    #    count-only id (``put#1``) also reads the members typed under it
+    #    (``put#1(String)``).
     variants = symbol_id_variants(symbol_id)
     res = await session.execute(
         select(WikiSymbol).where(
@@ -212,15 +218,18 @@ async def resolve_symbol_rows(session, repo_id: str, symbol_id: str) -> list[Wik
             or_(
                 WikiSymbol.symbol_id.in_(variants),
                 *(
-                    WikiSymbol.symbol_id.like(f"{escape_like(sid)}#%", escape=LIKE_ESCAPE)
+                    WikiSymbol.symbol_id.like(f"{escape_like(sid)}{tail}%", escape=LIKE_ESCAPE)
                     for sid in variants
+                    for tail in ("#", "(")
                 ),
             ),
         )
     )
     found = list(res.scalars().all())
     rows = [row for row in found if row.symbol_id in variants] or [
-        row for row in found if base_symbol_id(row.symbol_id) in variants
+        row
+        for row in found
+        if base_symbol_id(row.symbol_id) in variants or untyped_symbol_id(row.symbol_id) in variants
     ]
     if rows:
         return order_candidates(rows, file_path)

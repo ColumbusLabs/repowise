@@ -1388,6 +1388,17 @@ def _parent_type_name(ancestor: Node, src: str) -> str | None:
     return _node_text(name_node, src)
 
 
+def _java_enum_constant(def_node: Node, config: LanguageConfig, src: str) -> str | None:
+    """The enum constant whose body declares *def_node*, before any enclosing type."""
+    ancestor = def_node.parent
+    while ancestor is not None and ancestor.type not in config.parent_class_types:
+        if ancestor.type == "enum_constant":
+            name = ancestor.child_by_field_name("name")
+            return _node_text(name, src) if name else None
+        ancestor = ancestor.parent
+    return None
+
+
 class ASTParser:
     """Unified AST parser — works for all languages via .scm query files.
 
@@ -1746,15 +1757,15 @@ class ASTParser:
 
         params_nodes = capture_dict.get("symbol.params", [])
         params_text = _node_text(params_nodes[0], src) if params_nodes else ""
-        sym_id = (
-            f"{file_info.path}::{parent_name}::{name}"
-            if parent_name
-            else f"{file_info.path}::{name}"
-        )
+        # The id scope adds a Java enum constant to its parent, so each
+        # constant's override is its own node while the enum stays its owner.
+        constant = _java_enum_constant(def_node, config, src) if language == "java" else None
+        scope = f"{parent_name}::{constant}" if parent_name and constant else parent_name
+        sym_id = f"{file_info.path}::{scope}::{name}" if scope else f"{file_info.path}::{name}"
         symbol = Symbol(
             id=sym_id,
             name=name,
-            qualified_name=_build_qualified_name(file_info.path, parent_name, name),
+            qualified_name=_build_qualified_name(file_info.path, scope, name),
             kind=kind,  # type: ignore[arg-type]
             signature=build_signature(node_type, name, params_text, def_node, src),
             start_line=start_line,
@@ -1877,17 +1888,11 @@ class ASTParser:
         if config.parent_extraction in ("nesting", "impl"):
             # Walk up the AST to find a class/impl ancestor
             ancestor = def_node.parent
-            # A Java enum constant's body is its own class: ``E { A { void m() {} } }``
-            # gives ``E::A``, so each constant's ``m`` is its own node.
-            constant: str | None = None
             while ancestor is not None:
-                if ancestor.type == "enum_constant" and constant is None:
-                    constant_name = ancestor.child_by_field_name("name")
-                    constant = _node_text(constant_name, src) if constant_name else None
-                elif ancestor.type in config.parent_class_types:
+                if ancestor.type in config.parent_class_types:
                     name = _parent_type_name(ancestor, src)
                     if name is not None:
-                        return f"{name}::{constant}" if constant else name
+                        return name
                 ancestor = ancestor.parent
             return None
 

@@ -70,6 +70,13 @@ def symbol_id_arity(symbol_id: str) -> str | None:
     return count.group() if count else payload
 
 
+def untyped_symbol_id(symbol_id: str) -> str:
+    """*symbol_id* with its parameter types dropped: ``put#1(String)`` -> ``put#1``."""
+    base, payload = split_symbol_id(symbol_id)
+    count = _COUNT.match(payload) if payload else None
+    return f"{base}#{count.group()}" if count else symbol_id
+
+
 def id_segment_name(segment: str) -> str:
     """The source name one id segment spells: ``notNull#1`` or ``IFoo`1`` -> the bare name."""
     name, hash_mark, payload = segment.partition("#")
@@ -108,20 +115,29 @@ _BUILTIN_TYPE_WORDS = frozenset(
 _WORD = re.compile(r"[A-Za-z_$][\w$]*(?:(?:\.|::)[A-Za-z_$][\w$]*)*")
 _TYPE_MARKS = re.compile(r"\*|&&?|\[\s*,*\s*\]|\.\.\.|\?")
 _ANNOTATION = re.compile(r"@[\w.]+(?:\([^)]*\))?")
+# ``(*cb)`` in ``void (*cb)(int)``: the pointer marks, then the parameter name.
+_FUNCTION_DECLARATOR = re.compile(r"\(\s*([*&^]+)\s*[\w$]*\s*\)")
 
 
 def _erased_parameter_type(parameter: str) -> str:
     """``final Map<K, V> m`` -> ``Map``, ``const std::string& s`` -> ``string&``.
 
     Type arguments, qualifiers, modifiers, defaults and the parameter name
-    go; array, pointer, reference, varargs and nullable marks stay, so
-    ``vector<int*>`` erases apart from ``vector<int>``.
+    go; array, pointer, reference and nullable marks stay, so ``vector<int*>``
+    erases apart from ``vector<int>``. Varargs read as the array they are, and
+    a function pointer as its return type plus ``fn``. The result never holds
+    ``.``, ``/`` or ``::``, which id consumers split names on.
     """
     text = _ANNOTATION.sub(" ", parameter).partition("=")[0]
+    pointer = _FUNCTION_DECLARATOR.search(strip_type_arguments(text))
+    if pointer is not None:
+        return _erased_parameter_type(text[: text.find("(")]) + pointer.group(1) + "fn"
     words = [w for w in _WORD.findall(strip_type_arguments(text)) if w not in _PARAMETER_MODIFIERS]
     if len(words) > 1 and words[-1] not in _BUILTIN_TYPE_WORDS:
         words.pop()
-    marks = "".join(re.sub(r"[\s,]", "", m) for m in _TYPE_MARKS.findall(text))
+    marks = "".join(
+        "[]" if m == "..." else re.sub(r"[\s,]", "", m) for m in _TYPE_MARKS.findall(text)
+    )
     return "_".join(re.split(r"\.|::", w)[-1] for w in words) + marks
 
 
@@ -197,6 +213,31 @@ def _split_same_counts(keyed: list[tuple[Symbol, str | None]]) -> list[tuple[Sym
     return out
 
 
+def pair_overloads(declared: list[Symbol], defined: list[Symbol]) -> dict[str, str]:
+    """``{declared id: defined id}``: by count and erased types, then by count.
+
+    The count alone pairs only where each side has one unpaired member of it,
+    which covers a type spelled two ways (``size_t`` and ``unsigned long``).
+    """
+    by_key: dict[str | None, dict[str, str]] = {}
+    for symbol in defined:
+        by_key.setdefault(_parameter_count(symbol), {}).setdefault(_parameter_types(symbol), symbol.id)
+    pairs: dict[str, str] = {}
+    left: dict[str | None, list[Symbol]] = defaultdict(list)
+    for symbol in declared:
+        target = by_key.get(_parameter_count(symbol), {}).get(_parameter_types(symbol))
+        if target is None:
+            left[_parameter_count(symbol)].append(symbol)
+        else:
+            pairs[symbol.id] = target
+    taken = set(pairs.values())
+    for count, members in left.items():
+        free = {sid for sid in by_key.get(count, {}).values() if sid not in taken}
+        if count is not None and len(members) == 1 and len(free) == 1:
+            pairs[members[0].id] = free.pop()
+    return pairs
+
+
 def _split_generic_types(symbols: list[Symbol]) -> None:
     """Suffix a generic type that shares its id with a sibling of another arity.
 
@@ -239,8 +280,10 @@ __all__ = [
     "has_overload_identity",
     "id_segment_name",
     "overload_sets",
+    "pair_overloads",
     "split_symbol_id",
     "symbol_discriminator",
     "symbol_id_arity",
     "symbol_id_discriminator",
+    "untyped_symbol_id",
 ]

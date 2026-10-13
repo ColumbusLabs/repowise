@@ -30,11 +30,13 @@ from repowise.core.ingestion.models import FileInfo, ParsedFile
 from repowise.core.ingestion.parser import ASTParser
 from repowise.core.ingestion.return_types import signature_parameter_range
 from repowise.core.ingestion.symbol_identity import (
+    _erased_parameter_type,
     base_symbol_id,
     id_segment_name,
     overload_sets,
     split_symbol_id,
     symbol_id_arity,
+    untyped_symbol_id,
 )
 from repowise.core.ingestion.traverser import FileTraverser
 from repowise.core.ingestion.type_names import type_argument_count
@@ -225,7 +227,8 @@ class TestJavaOverloads:
         assert (node["start_line"], node["signature"]) == (3, "put(int k) -> void")
         assert {
             "P.java::P::put#1(String)",
-            "P.java::P::put#2(Map,Object...)",
+            # Varargs read as the array they are: no ``.`` in an id payload.
+            "P.java::P::put#2(Map,Object[])",
             "P.java::P::put#2(char[],long)",
             # A count no sibling shares keeps the bare count.
             "P.java::P::put#3",
@@ -233,6 +236,29 @@ class TestJavaOverloads:
         assert split_symbol_id("P.java::P::put#2(char[],long)") == ("P.java::P::put", "2(char[],long)")
         assert symbol_id_arity("P.java::P::put#2(char[],long)") == "2"
         assert id_segment_name("put#2(char[],long)") == "put"
+        assert bare_name("P.java::P::put#2(Map,Object[])") == "put"
+        assert untyped_symbol_id("P.java::P::put#2(char[],long)") == "P.java::P::put#2"
+
+    @pytest.mark.parametrize(
+        ("parameter", "erased"),
+        [
+            ("Object... rest", "Object[]"),
+            ("final java.util.Map<String, Integer> m", "Map"),
+            ("void (*cb)(int, int)", "void*fn"),
+            ("int (&row)[4]", "int&fn"),
+            ("...", "[]"),
+            ("Args&&... args", "Args&&[]"),
+            ("const std::vector<ns::T*>& v", "vector*&"),
+            ("@a.b.C(x = \"/p.q\") String s", "String"),
+            ("unsigned long n", "unsigned_long"),
+        ],
+    )
+    def test_an_erased_parameter_type_never_holds_a_name_separator(
+        self, parameter: str, erased: str
+    ) -> None:
+        got = _erased_parameter_type(parameter)
+        assert got == erased
+        assert not any(sep in got for sep in (".", "/", "::", "(", ")", "#"))
 
     def test_an_inserted_overload_renames_no_sibling(self) -> None:
         body = "  void put(String k) { }\n  void put(int k) { }\n"
@@ -252,6 +278,11 @@ class TestJavaOverloads:
         by_id = {s.id: s for s in _parse("Op.java", "java", text).symbols}
         assert {"Op.java::Op::PLUS::apply", "Op.java::Op::MINUS::apply", "Op.java::Op::apply"} <= set(by_id)
         assert by_id["Op.java::Op::MINUS::apply"].qualified_name == "Op.Op.MINUS.apply"
+        # The enum stays the owner: its node holds every constant's method.
+        assert by_id["Op.java::Op::MINUS::apply"].parent_name == "Op"
+        graph = _graph({"Op.java": ("java", text)})
+        assert graph.has_edge("Op.java::Op", "Op.java::Op::PLUS::apply")
+        assert graph["Op.java::Op"]["Op.java::Op::PLUS::apply"]["edge_type"] == "has_method"
         edges = _edges(tmp_path, {"Op.java": ("java", text)})
         assert ("Op.java::Op::MINUS::apply", "Op.java::Op::negate") in edges
 
@@ -489,6 +520,33 @@ class TestCppOverloads:
         assert graph.nodes["util.h::pad#1"]["defined_by"] == "util.cpp::pad#1"
         assert graph.nodes["util.h::pad#3"]["defined_by"] == "util.cpp::pad#3"
         assert graph.has_edge("main.cpp::main", "util.cpp::pad#3")
+
+    @pytest.mark.parametrize("header_first", [True, False])
+    def test_a_member_pairs_with_a_plain_id_definition(self, tmp_path: Path, header_first: bool) -> None:
+        decls = ["int f(int a);", "int f(long a);"]
+        if not header_first:
+            decls.reverse()
+        (tmp_path / "f.h").write_text("\n".join(decls) + "\n")
+        (tmp_path / "f.cpp").write_text('#include "f.h"\nint f(int x) { return x; }\n')
+        graph = self._build(tmp_path)
+        assert graph.nodes["f.h::f#1(int)"]["defined_by"] == "f.cpp::f"
+        assert not graph.nodes["f.h::f#1(long)"].get("defined_by")
+
+    def test_a_type_spelled_two_ways_pairs_by_count(self, tmp_path: Path) -> None:
+        (tmp_path / "g.h").write_text("int g(int a);\nint g(size_t n);\n")
+        (tmp_path / "g.cpp").write_text(
+            '#include "g.h"\nint g(int a) { return a; }\nint g(unsigned long n) { return 0; }\n'
+        )
+        graph = self._build(tmp_path)
+        assert graph.nodes["g.h::g#1(int)"]["defined_by"] == "g.cpp::g#1(int)"
+        assert graph.nodes["g.h::g#1(size_t)"]["defined_by"] == "g.cpp::g#1(unsigned_long)"
+
+    @staticmethod
+    def _build(root: Path):
+        builder = GraphBuilder(repo_path=root)
+        for info in FileTraverser(root).traverse():
+            builder.add_file(_PARSER.parse_file(info, Path(info.abs_path).read_bytes()))
+        return builder.build()
 
     def test_a_set_split_between_header_and_source_keeps_its_pairing(self, tmp_path: Path) -> None:
         """One overload inline in the header, one in the .cpp: the .cpp body takes the call."""
