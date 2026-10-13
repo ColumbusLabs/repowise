@@ -668,9 +668,14 @@ class Declaration(NamedTuple):
 _FIELD_CLOSERS = frozenset({";", "="})
 
 # Where a class-scope annotation may end its line: Python's ``x: T`` and a
-# semicolon-free TypeScript ``x: T`` are fields too.
+# semicolon-free TypeScript ``x: T`` are fields too. Kotlin and Swift keep a
+# closer only on a `val`/`var`/`let` match, so no parameter reaches here: a
+# Kotlin constructor property (`class R @Inject constructor(private val api:
+# Api)`) closes on `,` or `)`, a Swift computed property on `{`.
 _LANGUAGE_FIELD_CLOSERS: dict[str, frozenset[str]] = {
+    "kotlin": frozenset({"=", "\n", ",", ")"}),
     "python": frozenset({"=", "\n"}),
+    "swift": frozenset({"=", "\n", "{"}),
     "typescript": frozenset({";", "=", "\n"}),
 }
 

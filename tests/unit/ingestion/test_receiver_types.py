@@ -30,7 +30,7 @@ def fields(source: str, language: str, methods: list[tuple[int, int]]) -> dict[s
     """One class spanning the whole text, with *methods* as its bodies."""
     lines = source.count("\n") + 1
     return types_by_class(
-        scan_declarations(source, language), {"f.cs::C": (1, lines)}, methods
+        scan_declarations(source, language), {"f.cs::C": (1, lines)}, methods, language
     ).get("f.cs::C", {})
 
 
@@ -407,6 +407,27 @@ class TestKotlinFieldScope:
         source = "class C {\n    fun run(timeout: Duration = d) { }\n}"
         assert fields(source, "kotlin", []) == {}
 
+    def test_an_injected_constructor_property_is_a_field(self) -> None:
+        """The Hilt shape: each property closes on `,` or `)`, not `=`."""
+        source = (
+            "class Repo @Inject constructor(\n    private val api: Api,\n"
+            "    val dao: Dao\n) {\n    fun f() { api.get() }\n}"
+        )
+        found = fields(source, "kotlin", [(5, 5)])
+        assert (found["api"], found["dao"]) == ("Api", "Dao")
+
+    def test_a_one_line_constructor_property_is_a_field(self) -> None:
+        source = "class Repo(private val api: Api) {\n    fun f() { api.get() }\n}"
+        assert fields(source, "kotlin", [(2, 2)])["api"] == "Api"
+
+    def test_a_plain_constructor_parameter_is_not_a_field(self) -> None:
+        source = "class Repo(api: Api, other: Dao) {\n    fun f() { }\n}"
+        assert fields(source, "kotlin", [(2, 2)]) == {}
+
+    def test_an_uninitialised_property_is_a_field(self) -> None:
+        source = "abstract class Repo {\n    abstract val api: Api\n}"
+        assert fields(source, "kotlin", [])["api"] == "Api"
+
 
 
 class TestSwiftShapes:
@@ -505,6 +526,18 @@ class TestSwiftRefusals:
             "    func run() {\n        logger.debug()\n    }\n}"
         )
         assert fields(source, "swift", [(3, 5)])["logger"] == "Logger"
+
+    def test_an_init_assigned_stored_property_is_a_field(self) -> None:
+        """`let api: Api` has no initialiser; `init` assigns it, so it ends its line."""
+        source = (
+            "final class Repo {\n    private let api: Api\n"
+            "    init(api: Api) { self.api = api }\n    func run() { api.get() }\n}"
+        )
+        assert fields(source, "swift", [(4, 4)]) == {"api": "Api"}
+
+    def test_a_computed_property_is_a_field(self) -> None:
+        source = "class C {\n    var store: Store { Store.shared }\n}"
+        assert fields(source, "swift", [])["store"] == "Store"
 
 
 class TestGoShapes:
