@@ -274,3 +274,45 @@ def test_java_rows_are_held_back_and_counted_not_dropped(tmp_path: Path):
         shown, held = split_gated(layer, rows, kind="biomarker_type", get=dict.get,
                                   include_unverified=True)
         assert shown == rows and held == {}
+
+
+def test_one_shot_iterables_reach_the_java_pass(tmp_path: Path):
+    _require_java()
+    parsed = {rel: _parse(tmp_path, rel, src) for rel, src in _mybatis(_LOOP_SERVICE).items()}
+    fcx = FileComplexity(functions=[], classes=[])
+    collect_lazy_loads(
+        (pair for pair in [(parsed[_SERVICE], fcx)]), (pf for pf in parsed.values())
+    )
+    assert [h.line for h in fcx.perf_hits] == [7]
+
+
+def test_same_named_base_elsewhere_does_not_type_a_child(tmp_path: Path):
+    files = {
+        "src/data/BaseRepository.java": """
+            package data;
+            import org.springframework.data.jpa.repository.JpaRepository;
+            public interface BaseRepository<T> extends JpaRepository<T, Long> {}
+        """,
+        "src/cache/BaseRepository.java": """
+            package cache;
+            public interface BaseRepository<T> { T get(Object key); }
+        """,
+        "src/cache/SessionRepository.java": """
+            package cache;
+            public interface SessionRepository extends BaseRepository<Session> {}
+        """,
+        "src/cache/Svc.java": """
+            package cache;
+            public class Svc {
+                private SessionRepository sessions;
+                void f(java.util.List<String> ids) {
+                    for (String id : ids) { sessions.get(id); }
+                }
+            }
+        """,
+    }
+    _require_java()
+    parsed = [_parse(tmp_path, rel, src) for rel, src in files.items()]
+    types = persistence_types(parsed)
+    assert "SessionRepository" not in types and "BaseRepository" not in types
+    assert _hits(tmp_path, files, "src/cache/Svc.java") == []

@@ -100,8 +100,8 @@ def _seed_interface(pf: Any, sym: Any, parents: list[str], packages: set[str]) -
 def persistence_types(parsed_files: Iterable[Any]) -> frozenset[str]:
     """Simple names of the repo's interfaces proven to be repositories or mappers.
 
-    A name declared by more than one type is dropped unless every declaration is
-    persistence: the receiver's simple type name could then mean either.
+    A simple name declared by more than one type is never trusted, as a receiver
+    type or as a base others inherit from: it could mean either declaration.
     """
     java = [pf for pf in parsed_files if pf.file_info.language == "java"]
     packages = {pkg for pf in java for pkg in _scan_packages(pf)}
@@ -122,14 +122,16 @@ def persistence_types(parsed_files: Iterable[Any]) -> frozenset[str]:
             extends.setdefault(sym.name, set()).update(own)
             if _seed_interface(pf, sym, own, packages):
                 typed.add(sym.name)
+    ambiguous = {name for name, count in declared.items() if count > 1}
+    typed -= ambiguous
     grew = True
     while grew:
         grew = False
         for name, bases in extends.items():
-            if name not in typed and bases & typed:
+            if name not in typed and name not in ambiguous and bases & typed:
                 typed.add(name)
                 grew = True
-    return frozenset(n for n in typed if declared.get(n, 0) <= 1)
+    return frozenset(typed)
 
 
 # -- per-file scan -----------------------------------------------------------------

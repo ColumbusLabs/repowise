@@ -100,6 +100,8 @@ def collect_lazy_loads(
 ) -> None:
     """Append hits to each walked file's ``perf_hits``; one file failing skips only it.
     The Java repository/mapper pass rides this ORM entry point."""
+    # Both passes read both inputs, so a one-shot iterable is materialized once.
+    walked, parsed_files = list(walked), list(parsed_files)
     reader = read_source or _disk_read
     index = build_model_index(parsed_files, reader)
     for pf, fcx in walked:
