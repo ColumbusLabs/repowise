@@ -1131,6 +1131,117 @@ class TestOwnerAwareModuleTier:
         ) in _edges(parsed, tmp_path)
 
 
+# Each module declares a top-level ``build`` first and a same-named method
+# after it, so a flat last-wins lookup answers with the method.
+_MODULE_ONLY_ALIAS_CASES = {
+    "dart": (
+        "lib/log.dart",
+        "void build(String m) {}\n\nclass JsonLogger {\n  void build(String m) {}\n}\n",
+        "lib/caller.dart",
+        "import 'log.dart' as log;\n\nvoid run() {\n  log.build('hi');\n}\n",
+    ),
+    "python": (
+        "models.py",
+        "def build():\n    return 1\n\n\nclass Widget:\n    def build(self):\n        return 2\n",
+        "caller.py",
+        "import models as m\n\ndef run():\n    return m.build()\n",
+    ),
+    "typescript": (
+        "util.ts",
+        "export function build(): number { return 1; }\n\n"
+        "export class Widget {\n  build(): number { return 2; }\n}\n",
+        "caller.ts",
+        "import * as util from './util';\n\n"
+        "export function run(): number {\n  return util.build();\n}\n",
+    ),
+    "javascript": (
+        "util.js",
+        "export function build() { return 1; }\n\nexport class Widget {\n  build() { return 2; }\n}\n",
+        "caller.js",
+        "import * as util from './util';\n\nexport function run() {\n  return util.build();\n}\n",
+    ),
+    "go": (
+        "util/util.go",
+        "package util\n\nfunc Build() int { return 1 }\n\n"
+        "type W struct{}\n\nfunc (w W) Build() int { return 2 }\n",
+        "main.go",
+        'package main\n\nimport "example.com/m/util"\n\nfunc run() int {\n\treturn util.Build()\n}\n',
+    ),
+    "rust": (
+        "helpers/src/lib.rs",
+        "pub fn build() -> u8 { 1 }\n\npub struct Widget;\n\n"
+        "impl Widget {\n    pub fn build(&self) -> u8 { 2 }\n}\n",
+        "src/main.rs",
+        "extern crate helpers as h;\n\npub fn run() -> u8 {\n    h::build()\n}\n",
+    ),
+    "swift": (
+        "Util.swift",
+        "func build() -> Int { return 1 }\n\nclass Widget {\n    func build() -> Int { return 2 }\n}\n",
+        "Caller.swift",
+        "import Util\n\nfunc run() -> Int {\n    return Util.build()\n}\n",
+    ),
+}
+
+
+class TestModuleAliasReachesTopLevelOnly:
+    """A call through an alias that names a module reaches its top-level names.
+
+    ``import 'log.dart' as log; log.message()`` calls log.dart's ``message``,
+    never ``_JsonLogger.message`` declared later in the same file.
+    """
+
+    @pytest.mark.parametrize("lang", sorted(_MODULE_ONLY_ALIAS_CASES))
+    def test_the_top_level_function_wins_over_a_later_method(
+        self, tmp_path: Path, lang: str
+    ) -> None:
+        module, module_src, caller, caller_src = _MODULE_ONLY_ALIAS_CASES[lang]
+        parsed = _parse_all(tmp_path, {module: (lang, module_src), caller: (lang, caller_src)})
+        links = {imp.module_path: module for imp in parsed[caller].imports}
+        _link_imports(parsed, {caller: links})
+        import_targets = {caller: {module}, module: set()}
+        caller_id = f"{caller}::run"
+        callees = {
+            callee
+            for src, callee, _, _ in _edges(parsed, tmp_path, import_targets)
+            if src == caller_id
+        }
+        assert callees == {f"{module}::{'Build' if lang == 'go' else 'build'}"}
+
+    def test_a_csharp_type_alias_still_reaches_the_type_s_members(
+        self, tmp_path: Path
+    ) -> None:
+        """``using A = N.T;`` may alias a type, so C# keeps the member lookup."""
+        parsed = _parse_all(
+            tmp_path,
+            {
+                "Shapes.cs": (
+                    "csharp",
+                    "namespace N {\n"
+                    "    public class Shape {\n"
+                    "        public static int Make() { return 1; }\n"
+                    "    }\n"
+                    "}\n",
+                ),
+                "Caller.cs": (
+                    "csharp",
+                    "using S = N.Shape;\n"
+                    "\n"
+                    "public class Caller {\n"
+                    "    public int Run() { return S.Make(); }\n"
+                    "}\n",
+                ),
+            },
+        )
+        _link_imports(parsed, {"Caller.cs": {"S": "Shapes.cs"}})
+        import_targets = {"Caller.cs": {"Shapes.cs"}, "Shapes.cs": set()}
+        assert (
+            "Caller.cs::Caller::Run",
+            "Shapes.cs::Shape::Make",
+            0.88,
+            "module_alias",
+        ) in _edges(parsed, tmp_path, import_targets)
+
+
 class TestExternalReceiverType:
     """A Java receiver declared with a type the repo does not own is refused.
 

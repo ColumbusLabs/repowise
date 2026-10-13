@@ -103,6 +103,15 @@ _LEXICAL_BARE_NAME_LANGUAGES = frozenset({"elixir", "fsharp"})
 # sites are mostly chained method calls, which repo-wide uniqueness still serves.
 _NAMED_IMPORT_SCOPE_LANGUAGES = _LEXICAL_BARE_NAME_LANGUAGES | {"rust"}
 
+# Languages whose module-alias binding always names a module, so a call through
+# it reaches only top-level declarations. C# is absent because ``using A = N.T;``
+# may alias a type, whose members it does reach. C, C++ and Ruby are absent
+# because their "alias" is an included file's stem, which a call can only match
+# by coinciding with a variable's name.
+_MODULE_ONLY_ALIAS_LANGUAGES = frozenset(
+    {"python", "typescript", "javascript", "svelte", "vue", "dart", "go", "rust", "swift"}
+)
+
 # The sentinel an import that binds a whole module's public names carries.
 _WILDCARD_IMPORTED_NAMES = ["*"]
 
@@ -268,6 +277,8 @@ class CallResolver(LanguageStrategiesMixin, ReceiverTypingMixin):
         self._mros: dict[str, tuple[str, ...] | None] = {}
         # Per-file symbol index: {file_path: {symbol_name: symbol_id}}
         self._file_symbols: dict[str, dict[str, str]] = {}
+        # The same, top-level symbols only: what a module alias can reach.
+        self._file_top_level: dict[str, dict[str, str]] = {}
 
         # Per-file method index: {file_path: {(class_name, method_name): symbol_id}}
         self._file_methods: dict[str, dict[tuple[str, str], str]] = {}
@@ -526,6 +537,7 @@ class CallResolver(LanguageStrategiesMixin, ReceiverTypingMixin):
     ) -> None:
         """Index one file's symbols, collecting what is settled repo-wide later."""
         file_syms: dict[str, str] = {}
+        top_level: dict[str, str] = {}
         file_methods: dict[tuple[str, str], str] = {}
         representatives = self._index_overload_sets(parsed)
 
@@ -545,10 +557,13 @@ class CallResolver(LanguageStrategiesMixin, ReceiverTypingMixin):
                 # below still takes it.
                 if sym.parent_name is None:
                     file_syms.setdefault(sym.name, index_id)
+                    top_level.setdefault(sym.name, index_id)
             else:
                 definitions[decl_key].append((path, index_id))
                 # File-level symbol index (top-level symbols and methods)
                 file_syms[sym.name] = index_id
+                if sym.parent_name is None:
+                    top_level[sym.name] = index_id
 
             # Method index: (class_name, method_name) → symbol_id
             if sym.parent_name:
@@ -563,6 +578,7 @@ class CallResolver(LanguageStrategiesMixin, ReceiverTypingMixin):
             self._index_globally(path, sym, index_id)
 
         self._file_symbols[path] = file_syms
+        self._file_top_level[path] = top_level
         self._file_methods[path] = file_methods
 
     def _csharp_extended_type(self, sym: Symbol) -> str | None:
@@ -737,16 +753,18 @@ class CallResolver(LanguageStrategiesMixin, ReceiverTypingMixin):
             resolved.origin,
         )
 
-    def _published(self, file_path: str, name: str) -> str | None:
+    def _published(self, file_path: str, name: str, *, top_level: bool = False) -> str | None:
         """The symbol *file_path* publishes under *name*, or None.
 
         A module may declare a symbol under one name and export it under
         another — ``export { stringType as string }`` — and every lookup that
         arrives through a namespace, a barrel or an import asks for the
         published name while the symbol table holds the local one. The table
-        answers first, so the alias can only ever add a hit.
+        answers first, so the alias can only ever add a hit. *top_level*
+        leaves class members out of the lookup.
         """
-        symbols = self._file_symbols.get(file_path, {})
+        table = self._file_top_level if top_level else self._file_symbols
+        symbols = table.get(file_path, {})
         found = symbols.get(name)
         if found is not None:
             return found
@@ -1614,7 +1632,7 @@ class CallResolver(LanguageStrategiesMixin, ReceiverTypingMixin):
         # Strategy 1: receiver is a module alias (e.g. "import models" → "models.User()")
         module_file = self._module_aliases.get(file_path, {}).get(receiver_name)
         if module_file:
-            return self._module_alias_call(module_file, call, caller_id)
+            return self._module_alias_call(file_path, module_file, call, caller_id)
 
         # Strategy 1b: receiver in import names (non-alias fallback for backward compat)
         name_to_file = self._import_names.get(file_path, {})
@@ -1627,12 +1645,19 @@ class CallResolver(LanguageStrategiesMixin, ReceiverTypingMixin):
 
     def _module_alias_call(
         self,
+        file_path: str,
         module_file: str,
         call: CallSite,
         caller_id: str,
     ) -> ResolvedCall | None:
         method_name = call.target_name
-        published = self._published_by(module_file, call.receiver_name, method_name)
+        # Where the alias can only name a module, ``log.message()`` reaches the
+        # module's own ``message``, never a same-named method of a class in it.
+        top_level = self._language_of(file_path) in _MODULE_ONLY_ALIAS_LANGUAGES
+        if top_level:
+            published = self._published(module_file, method_name, top_level=True)
+        else:
+            published = self._published_by(module_file, call.receiver_name, method_name)
         if published is not None:
             return ResolvedCall(caller_id, published, 0.88, call.line, "module_alias")
         # A namespace over a barrel declares nothing of its own, so chase the
@@ -1643,7 +1668,7 @@ class CallResolver(LanguageStrategiesMixin, ReceiverTypingMixin):
             return None
         binding = self._import_bindings.get(module_file, {}).get(method_name)
         declared_name = (binding.exported_name if binding else None) or method_name
-        published = self._published(origin, declared_name)
+        published = self._published(origin, declared_name, top_level=top_level)
         if published is None:
             return None
         return ResolvedCall(caller_id, published, 0.88, call.line, "module_alias")

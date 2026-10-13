@@ -373,7 +373,8 @@ class LanguageStrategiesMixin:
         if pkg is None:
             return None
         for sibling in pkg.files:
-            syms = self._file_symbols.get(sibling, {})
+            # A package qualifier reaches package-level names, never a method.
+            syms = self._file_top_level.get(sibling, {})
             sym_id = syms.get(call.target_name)
             if sym_id is not None and sym_id != caller_id:
                 return ResolvedCall(caller_id, sym_id, 0.88, call.line, "package_alias")
