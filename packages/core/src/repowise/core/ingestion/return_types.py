@@ -22,7 +22,7 @@ def declared_return_type(signature: str) -> str | None:
 _PAIRS = {"(": ")", "[": "]", "{": "}", "<": ">"}
 
 
-def _top_level_parameters(signature: str) -> list[str] | None:
+def signature_parameters(signature: str) -> list[str] | None:
     """The top-level parameter texts of a stored callable signature.
 
     ``[]`` for an empty list, None when the signature has no closed list. A
@@ -56,7 +56,7 @@ def _top_level_parameters(signature: str) -> list[str] | None:
 
 def signature_parameter_count(signature: str) -> int | None:
     """Count top-level parameters in a stored callable signature."""
-    parameters = _top_level_parameters(signature)
+    parameters = signature_parameters(signature)
     return None if parameters is None else len(parameters)
 
 
@@ -67,7 +67,7 @@ def signature_parameter_range(signature: str, language: str) -> tuple[int, int |
     top open, a C# or C++ default lowers the floor, and a C# extension method
     is also called on its receiver, one argument short of its declared list.
     """
-    parameters = _top_level_parameters(signature)
+    parameters = signature_parameters(signature)
     if parameters is None:
         return None
     texts = [text.strip() for text in parameters]

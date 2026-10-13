@@ -1370,6 +1370,24 @@ def _parse_tree(
     return root, parse_errors, grammar_tag, language
 
 
+def _parent_type_name(ancestor: Node, src: str) -> str | None:
+    """The name a class/impl ancestor gives its members, without type arguments."""
+    name_node = ancestor.child_by_field_name("name") or (
+        ancestor.child_by_field_name("type")  # Rust impl_item
+    )
+    if name_node is None:
+        return None
+    # For Rust impl blocks with generic types (e.g. impl<T> Foo<T>),
+    # extract only the base type name, not the full generic signature.
+    if name_node.type in ("generic_type", "scoped_type_identifier"):
+        inner = name_node.child_by_field_name(
+            "type" if name_node.type == "generic_type" else "name"
+        )
+        if inner and inner.type == "type_identifier":
+            name_node = inner
+    return _node_text(name_node, src)
+
+
 class ASTParser:
     """Unified AST parser — works for all languages via .scm query files.
 
@@ -1859,23 +1877,17 @@ class ASTParser:
         if config.parent_extraction in ("nesting", "impl"):
             # Walk up the AST to find a class/impl ancestor
             ancestor = def_node.parent
+            # A Java enum constant's body is its own class: ``E { A { void m() {} } }``
+            # gives ``E::A``, so each constant's ``m`` is its own node.
+            constant: str | None = None
             while ancestor is not None:
-                if ancestor.type in config.parent_class_types:
-                    name_node = ancestor.child_by_field_name("name") or (
-                        ancestor.child_by_field_name("type")  # Rust impl_item
-                    )
-                    if name_node:
-                        # For Rust impl blocks with generic types (e.g. impl<T> Foo<T>),
-                        # extract only the base type name, not the full generic signature.
-                        if name_node.type == "generic_type":
-                            inner = name_node.child_by_field_name("type")
-                            if inner and inner.type == "type_identifier":
-                                name_node = inner
-                        elif name_node.type == "scoped_type_identifier":
-                            inner = name_node.child_by_field_name("name")
-                            if inner and inner.type == "type_identifier":
-                                name_node = inner
-                        return _node_text(name_node, src)
+                if ancestor.type == "enum_constant" and constant is None:
+                    constant_name = ancestor.child_by_field_name("name")
+                    constant = _node_text(constant_name, src) if constant_name else None
+                elif ancestor.type in config.parent_class_types:
+                    name = _parent_type_name(ancestor, src)
+                    if name is not None:
+                        return f"{name}::{constant}" if constant else name
                 ancestor = ancestor.parent
             return None
 

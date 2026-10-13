@@ -7,7 +7,10 @@ gains a discriminator:
 
 - ``#<digits>`` on the last segment: the declared parameter count of one
   member of an overload set, ``Validate.java::Validate::notNull#1``. A call
-  narrows to the member whose parameters admit its argument count.
+  narrows to the member whose parameters admit its argument count. Members
+  that share a count also carry their erased parameter types,
+  ``StringUtil.java::StringUtil::append#1(String)``, so an inserted overload
+  never renames its siblings.
 - ``#<tag>(<predicate>)`` on the last segment: one build variant of a symbol
   declared once per configuration, ``lib.rs::f#cfg(not(unix))``. A call may
   mean any variant.
@@ -27,10 +30,12 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable
 
 from .models import Symbol
-from .return_types import signature_parameter_count
+from .return_types import signature_parameter_count, signature_parameters
 
-# The payload after ``#``: a parameter count, or a build-variant predicate.
-_PAYLOAD = re.compile(r"\d+|[A-Za-z_]\w*\(.*\)")
+# The payload after ``#``: a parameter count with optional parameter types, or
+# a build-variant predicate.
+_PAYLOAD = re.compile(r"\d+(?:\([^()]*\))?|[A-Za-z_]\w*\(.*\)")
+_COUNT = re.compile(r"\d+")
 _GENERIC_ARITY = re.compile(r"`\d+$")
 
 
@@ -55,6 +60,13 @@ def base_symbol_id(symbol_id: str) -> str:
 def symbol_id_discriminator(symbol_id: str) -> str | None:
     """The discriminator after ``#``, or None for a plain id."""
     return split_symbol_id(symbol_id)[1]
+
+
+def symbol_id_arity(symbol_id: str) -> str | None:
+    """The discriminator without its parameter types: ``put#1(String)`` -> ``1``."""
+    payload = symbol_id_discriminator(symbol_id)
+    count = _COUNT.match(payload) if payload else None
+    return count.group() if count else payload
 
 
 def id_segment_name(segment: str) -> str:
@@ -83,6 +95,49 @@ def _parameter_count(symbol: Symbol) -> str | None:
     return None if count is None else str(count)
 
 
+# Words in a parameter that are not its type, and builtin words a type may end
+# on (``unsigned int`` has no name to drop).
+_PARAMETER_MODIFIERS = frozenset(
+    {"final", "const", "volatile", "mutable", "register", "struct", "class", "enum",
+     "typename", "ref", "out", "in", "params", "this", "scoped", "readonly"}
+)
+_BUILTIN_TYPE_WORDS = frozenset(
+    {"signed", "unsigned", "short", "long", "int", "char", "double", "float", "bool", "void"}
+)
+_WORD = re.compile(r"[A-Za-z_$][\w$]*(?:(?:\.|::)[A-Za-z_$][\w$]*)*")
+_TYPE_MARKS = re.compile(r"\*|&&?|\[\s*,*\s*\]|\.\.\.|\?")
+_ANNOTATION = re.compile(r"@[\w.]+(?:\([^)]*\))?")
+
+
+def _erased_parameter_type(parameter: str) -> str:
+    """``final Map<K, V> m`` -> ``Map``, ``const std::string& s`` -> ``string&``.
+
+    Type arguments, qualifiers, modifiers, defaults and the parameter name
+    go; array, pointer, reference, varargs and nullable marks stay.
+    """
+    depth = 0
+    kept: list[str] = []
+    for char in _ANNOTATION.sub(" ", parameter).partition("=")[0]:
+        if char == "<":
+            depth += 1
+        elif char == ">" and depth:
+            depth -= 1
+        elif not depth:
+            kept.append(char)
+    text = "".join(kept)
+    words = [w for w in _WORD.findall(text) if w not in _PARAMETER_MODIFIERS]
+    if len(words) > 1 and words[-1] not in _BUILTIN_TYPE_WORDS:
+        words.pop()
+    marks = "".join(re.sub(r"[\s,]", "", m) for m in _TYPE_MARKS.findall(text))
+    return "_".join(re.split(r"\.|::", w)[-1] for w in words) + marks
+
+
+def _parameter_types(symbol: Symbol) -> str:
+    """``(String,int[])``: the erased types that split a same-count overload."""
+    parameters = signature_parameters(symbol.signature or "") or []
+    return "(" + ",".join(_erased_parameter_type(p) for p in parameters) + ")"
+
+
 # Which discriminator tells colliding members apart, per language. A build
 # variant (C ``#if`` branches, Rust ``cfg``) registers here as its own function.
 _DISCRIMINATORS: dict[str, Callable[[Symbol], str | None]] = {
@@ -109,9 +164,10 @@ def symbol_discriminator(symbol: Symbol) -> str | None:
 def disambiguate_colliding_ids(symbols: list[Symbol], language: str) -> None:
     """Give each member of a colliding id its own id, in place.
 
-    Members whose discriminators are equal stay one id (two overloads of one
-    arity are one node); a member with no discriminator, such as a nested type
-    beside a method of its name, keeps the plain id.
+    Members that share a parameter count are told apart by their erased
+    parameter types; members equal on both (a C++ declaration and its
+    definition) stay one id. A member with no discriminator, such as a nested
+    type beside a method of its name, keeps the plain id.
     """
     discriminator = _DISCRIMINATORS.get(language)
     if discriminator is None:
@@ -125,11 +181,27 @@ def disambiguate_colliding_ids(symbols: list[Symbol], language: str) -> None:
         if len(members) < 2:
             continue
         keyed = [(symbol, discriminator(symbol)) for symbol in members]
+        if discriminator is _parameter_count:
+            keyed = _split_same_counts(keyed)
         if len({key for _, key in keyed if key is not None}) < 2:
             continue
         for symbol, key in keyed:
             if key is not None:
                 symbol.id = f"{base}#{key}"
+
+
+def _split_same_counts(keyed: list[tuple[Symbol, str | None]]) -> list[tuple[Symbol, str | None]]:
+    """Append parameter types to every count two members share, when they differ."""
+    typed: dict[str, dict[int, str]] = defaultdict(dict)
+    for index, (symbol, key) in enumerate(keyed):
+        if key is not None:
+            typed[key][index] = f"{key}{_parameter_types(symbol)}"
+    out = list(keyed)
+    for by_index in typed.values():
+        if len(set(by_index.values())) > 1:
+            for index, key in by_index.items():
+                out[index] = (keyed[index][0], key)
+    return out
 
 
 def _split_generic_types(symbols: list[Symbol]) -> None:
@@ -176,5 +248,6 @@ __all__ = [
     "overload_sets",
     "split_symbol_id",
     "symbol_discriminator",
+    "symbol_id_arity",
     "symbol_id_discriminator",
 ]

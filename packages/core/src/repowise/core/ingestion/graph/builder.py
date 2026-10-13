@@ -290,7 +290,7 @@ class GraphBuilder(MetricsMixin, ResolveMixin, EdgesMixin, SerializeMixin, Rehyd
                     self._graph.add_edge(path, sym.id, edge_type="defines")
                     continue
             # Where overloads get their own ids, two definitions still sharing
-            # one are overloads of one arity: the first declared keeps the node,
+            # one erase to one signature: the first declared keeps the node,
             # so its span does not depend on how many follow it.
             elif (
                 existing is not None

@@ -74,7 +74,12 @@ STORE_FORMAT_VERSION: int = 2
 #: v7: code naming Alembic gets a framework edge to every migration it can
 #: load, and a VS Code extension test to the entry its package declares; the
 #: first update writes those edges for unchanged files too.
-PARSER_SCHEMA_VERSION: int = 7
+#:
+#: v8: Java, C# and C++ overloads of one arity carry their erased parameter
+#: types (``put#1(String)``, ``put#1(int)``), and a method in a Java enum
+#: constant's body sits under the constant (``Op::PLUS::apply``); the first
+#: update re-keys those symbols and graph nodes.
+PARSER_SCHEMA_VERSION: int = 8
 
 #: state.json key holding the store format version that wrote the store.
 STORE_FORMAT_VERSION_KEY = "store_format_version"

@@ -285,7 +285,7 @@ def _qualified_cpp_parent(name_node: Node, src: str) -> str | None:
 def _build_qualified_name(file_path: str, parent_name: str | None, name: str) -> str:
     module = Path(file_path).with_suffix("").as_posix().replace("/", ".")
     if parent_name:
-        return f"{module}.{parent_name}.{name}"
+        return f"{module}.{parent_name.replace('::', '.')}.{name}"
     return f"{module}.{name}"
 
 

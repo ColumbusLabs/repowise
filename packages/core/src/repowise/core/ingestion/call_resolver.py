@@ -594,7 +594,7 @@ class CallResolver(LanguageStrategiesMixin, ReceiverTypingMixin):
         members: dict[str, list[Symbol]] = defaultdict(list)
         for sym in parsed.symbols:
             base, payload = split_symbol_id(sym.id)
-            if payload is not None and payload.isdigit():
+            if payload is not None and payload[0].isdigit():
                 members[base].append(sym)
         representatives: dict[str, str] = {}
         for overloads in members.values():
