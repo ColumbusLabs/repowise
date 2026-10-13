@@ -22,11 +22,18 @@ class _LanguageCallStrategies:
     after all of them, so a strategy there only ever sees a call nothing else
     claimed and can only add an edge. All three stop at the first hit.
     Strategies are named rather than bound so a probe can substitute one.
+
+    ``member_bare_fallback`` lets a member or chained call nothing claimed fall
+    back to the bare-name tiers. ``inherited_typed_receiver`` lets a typed
+    receiver whose type lacks the method answer with the one ancestor that
+    declares it.
     """
 
     free: tuple[str, ...] = ()
     member: tuple[str, ...] = ()
     member_fallback: tuple[str, ...] = ()
+    member_bare_fallback: bool = True
+    inherited_typed_receiver: bool = False
 
 
 _NO_LANGUAGE_STRATEGIES = _LanguageCallStrategies()
@@ -61,10 +68,15 @@ _LANGUAGE_CALL_STRATEGIES: dict[str, _LanguageCallStrategies] = {
     # Kotlin shares the JVM tiers and the typed-receiver fallback. Java takes
     # the uniqueness-gated package tier, Kotlin the open one; see
     # ``_resolve_java_same_package_unique`` for why that is a language rule.
+    # A Java member call never reaches the bare-name tiers: measured on jsoup
+    # and gson, they bound such calls at 0.38 site precision. Kotlin is
+    # unmeasured, so it keeps both defaults.
     "java": replace(
         _JVM_STRATEGIES,
         free=("_resolve_java_same_package_unique",),
         member_fallback=_TYPED_RECEIVER,
+        member_bare_fallback=False,
+        inherited_typed_receiver=True,
     ),
     "kotlin": replace(_JVM_STRATEGIES, member_fallback=_TYPED_RECEIVER),
     "csharp": _LanguageCallStrategies(member_fallback=_TYPED_RECEIVER),

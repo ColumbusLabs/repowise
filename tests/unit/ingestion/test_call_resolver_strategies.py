@@ -1168,6 +1168,69 @@ class TestForeignReceiverTypes:
         assert populated == {"rust"}
 
 
+class TestInheritedTypedReceiver:
+    """A typed receiver whose type lacks the method reaches the one ancestor declaring it."""
+
+    _BASE = (
+        "package org.acme;\npublic class Base {\n"
+        "    public Object get(int i) { return null; }\n}\n"
+    )
+    _CALLER = (
+        "package org.acme;\npublic class Caller {\n"
+        "    public Object run(Child c) {\n        return c.get(0);\n    }\n}\n"
+    )
+
+    @staticmethod
+    def _caller_edges(
+        tmp_path: Path, files: dict[str, tuple[str, str]], parents: set[str]
+    ) -> list[tuple[str, str, float, str]]:
+        """Edges out of ``Caller``, with ``Child`` given *parents* (no heritage phase runs)."""
+        parsed = _parse_all(tmp_path, files)
+        child = next(p for p in files if "/Child." in p) + "::Child"
+        resolver = CallResolver(
+            parsed,
+            {p: set() for p in parsed},
+            repo_path=str(tmp_path),
+            heritage_parents={child: parents},
+        )
+        caller = next(p for p in files if "/Caller." in p)
+        return [
+            (rc.caller_id, rc.callee_id, rc.confidence, rc.origin)
+            for rc in resolver.resolve_file(caller, parsed[caller].calls)
+        ]
+
+    def _java(self, **files: str) -> dict[str, tuple[str, str]]:
+        files = {"Base.java": self._BASE, **files, "Caller.java": self._CALLER}
+        return {f"src/org/acme/{k}": ("java", v) for k, v in files.items()}
+
+    def test_an_inherited_method_resolves_to_the_ancestor(self, tmp_path: Path) -> None:
+        child = "package org.acme;\npublic class Child extends Base {}\n"
+        files = self._java(**{"Child.java": child})
+        assert self._caller_edges(tmp_path, files, {"src/org/acme/Base.java::Base"}) == [
+            (
+                "src/org/acme/Caller.java::Caller::run",
+                "src/org/acme/Base.java::Base::get",
+                0.75,
+                "receiver_typed_global",
+            )
+        ]
+
+    def test_two_declaring_ancestors_give_no_edge(self, tmp_path: Path) -> None:
+        iface = "package org.acme;\npublic interface Getter {\n    Object get(int i);\n}\n"
+        child = "package org.acme;\npublic class Child extends Base implements Getter {}\n"
+        files = self._java(**{"Getter.java": iface, "Child.java": child})
+        parents = {"src/org/acme/Base.java::Base", "src/org/acme/Getter.java::Getter"}
+        assert self._caller_edges(tmp_path, files, parents) == []
+
+    def test_kotlin_does_not_walk_ancestors(self, tmp_path: Path) -> None:
+        files = {
+            "src/Base.kt": ("kotlin", "open class Base {\n    fun get(i: Int): Any? = null\n}\n"),
+            "src/Child.kt": ("kotlin", "class Child : Base()\n"),
+            "src/Caller.kt": ("kotlin", "fun run(c: Child): Any? {\n    return c.get(0)\n}\n"),
+        }
+        assert self._caller_edges(tmp_path, files, {"src/Base.kt::Base"}) == []
+
+
 class TestOwnerAwareModuleTier:
     """The module and import-name tiers pick an owner, not just a file.
 
@@ -1416,34 +1479,30 @@ class TestExternalReceiverType:
             "receiver_typed_same_package",
         ) in self._caller_edges(tmp_path, caller, **{"Outer.java": outer})
 
-    def test_a_generic_parameter_is_not_refused(self, tmp_path: Path) -> None:
-        """``T`` is unknown, not external: the name tiers still answer."""
+    # Unknown rather than external, so not refused; a Java member call still
+    # has no bare-name reading to fall back to.
+    def test_a_generic_parameter_gets_no_bare_name_edge(self, tmp_path: Path) -> None:
         caller = self._caller(
             "",
             "Object o) {\n        return run2(o);\n    }\n"
             "    public <T> Object run2(T x) {\n        return x.get(0);",
         )
-        assert [e[1] for e in self._caller_edges(tmp_path, caller) if e[1].endswith("::get")] == [
-            "src/org/acme/TagSet.java::TagSet::get"
-        ]
+        assert not [e for e in self._caller_edges(tmp_path, caller) if e[1].endswith("::get")]
 
-    def test_a_wildcard_imported_unknown_type_is_not_refused(self, tmp_path: Path) -> None:
+    def test_a_wildcard_imported_unknown_type_gets_no_bare_name_edge(
+        self, tmp_path: Path
+    ) -> None:
         caller = self._caller("import com.vendor.*;\n", "Widget w) {\n        return w.get(0);")
-        assert [e[1] for e in self._caller_edges(tmp_path, caller)] == [
-            "src/org/acme/TagSet.java::TagSet::get"
-        ]
+        assert self._caller_edges(tmp_path, caller) == []
 
-    def test_an_unresolved_import_of_a_repo_type_is_not_refused(self, tmp_path: Path) -> None:
-        """No import-resolution phase runs here, so the import reads as external.
-
-        The repo declaring the name is what keeps it from being refused.
-        """
+    def test_an_unresolved_import_of_a_repo_type_gets_no_bare_name_edge(
+        self, tmp_path: Path
+    ) -> None:
+        """No import-resolution phase runs here, so the import reads as external."""
         caller = self._caller(
             "import org.acme.TagSet;\n", "TagSet t) {\n        return t.get(0);"
         )
-        assert [e[1] for e in self._caller_edges(tmp_path, caller)] == [
-            "src/org/acme/TagSet.java::TagSet::get"
-        ]
+        assert self._caller_edges(tmp_path, caller) == []
 
     def test_only_java_records_builtin_declarations(self) -> None:
         from repowise.core.ingestion.languages.receiver_types import (

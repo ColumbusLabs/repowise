@@ -930,12 +930,15 @@ class CallResolver(LanguageStrategiesMixin, ReceiverTypingMixin):
             if handled:
                 return resolved
 
+        bare_fallback = self._strategies_for(file_path).member_bare_fallback
         # --- Method call with receiver: receiver.method() ---
         if call.receiver_name:
             handled, hit = self._resolve_member_call(file_path, call, caller_id)
-            if not handled and call.bare_name_fallback:
+            if not handled and call.bare_name_fallback and bare_fallback:
                 hit = self._resolve_free_call(file_path, call, caller_id)
             return self._with_props(hit, call)
+        if receiver_call is not None and not bare_fallback:
+            return None
 
         # --- Free function call: function() ---
         return self._with_props(self._resolve_free_call(file_path, call, caller_id), call)

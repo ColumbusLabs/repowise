@@ -246,7 +246,30 @@ class ReceiverTypingMixin:
             found = self._typed_receiver_lookup(file_path, call, caller_id, type_name)
             if found is not None and found[1] != "global":
                 return found
-        return self._typed_receiver_lookup(file_path, call, caller_id, bare, type_name)
+        found = self._typed_receiver_lookup(file_path, call, caller_id, bare, type_name)
+        if found is None and self._strategies_for(file_path).inherited_typed_receiver:
+            return self._inherited_typed_target(file_path, call, caller_id, bare)
+        return found
+
+    def _inherited_typed_target(
+        self, file_path: str, call: CallSite, caller_id: str, bare: str
+    ) -> tuple[str, str] | None:
+        """The one ancestor method a typed receiver reaches when its type lacks it.
+
+        The type is the repository's only declaration of *bare*, the repo-wide
+        tier's evidence, so the answer is scoped ``global``. A type that
+        declares the method itself was refused above for a reason this keeps.
+        """
+        if bare in self._externally_bound_names(file_path):
+            return None
+        declared = self._declared_types_named(bare)
+        if len(declared) != 1:
+            return None
+        type_id = declared[0][1][0]
+        if self._declares(type_id, call.target_name) is not None:
+            return None
+        hit = self._ancestor_method(type_id, call.target_name, caller_id)
+        return None if hit is None else (hit, "global")
 
     def _typed_receiver_lookup(
         self,
