@@ -32,6 +32,7 @@ Examples:
 from __future__ import annotations
 
 import json
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -612,6 +613,7 @@ def _score(
 ) -> ChangeRiskResult:
     """Score the change, or exit 2 when it cannot be read or, gated, ranked."""
     status = ci_notices(subject.fmt)
+    _verify_revision(subject)
     if baseline and subject.fmt == "table":
         status.print(f"[dim]Sampling up to {baseline} recent commits…[/dim]")
     try:
@@ -627,7 +629,8 @@ def _score(
         cannot_evaluate(
             subject.fmt,
             "change_unreadable",
-            f"Could not read change {subject.revspec or 'HEAD'!r} in {subject.repo_path}: {exc}",
+            f"Could not read change {subject.revspec or 'HEAD'!r} in {subject.repo_path}: "
+            f"{_git_error_detail(exc)}",
         )
     if subject.fail_above is not None and result.percentile is None:
         from repowise.core.analysis.change_risk.render import unranked_reason
@@ -639,6 +642,56 @@ def _score(
             f"(check the revspec, --ext, or exclusion filters).[/yellow]"
         )
     return result
+
+
+def _git_error_detail(exc: Exception) -> str:
+    """Git's own message for a failed git call, else the exception text."""
+    stderr = exc.stderr if isinstance(exc, subprocess.CalledProcessError) else None
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode(errors="replace")
+    lines = [line.strip() for line in (stderr or "").splitlines() if line.strip()]
+    return lines[0] if lines else str(exc)
+
+
+def _verify_revision(subject: _Subject) -> None:
+    """Exit 2 with git's message when a single-commit revspec does not resolve.
+
+    Checked before the sampling notice so an unknown ref is reported first and
+    alone. Ranges and the working tree are left to the scorer.
+    """
+    revspec = subject.revspec
+    if not revspec or ".." in revspec:
+        return
+    try:
+        commit = f"{revspec}^{{commit}}"
+        subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", "--end-of-options", commit],
+            cwd=subject.repo_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError:
+        # --quiet suppresses the message; ask git again for the human one.
+        probe = subprocess.run(
+            ["git", "rev-parse", "--end-of-options", revspec],
+            cwd=subject.repo_path,
+            capture_output=True,
+            text=True,
+        )
+        if probe.returncode == 0:
+            detail = f"{revspec!r} does not name a commit"
+        else:
+            detail = _git_error_detail(
+                subprocess.CalledProcessError(probe.returncode, probe.args, stderr=probe.stderr)
+            )
+        cannot_evaluate(
+            subject.fmt,
+            "change_unreadable",
+            f"Could not read change {revspec!r} in {subject.repo_path}: {detail}",
+        )
+    except OSError:
+        return
 
 
 def _print_change(subject: _Subject, result: ChangeRiskResult, failed: bool) -> None:
