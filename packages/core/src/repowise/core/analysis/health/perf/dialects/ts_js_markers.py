@@ -116,6 +116,40 @@ def _is_collection_spread_of(node: Node, name: str) -> bool:
     return identifier_name(first_named_child(node)) == name
 
 
+# A literal table up to this size is a fixed set; past it a linear probe can
+# still cost enough to be worth a ``Set``. Ceiling: the size is a judgement, not
+# a measurement.
+_FIXED_TABLE_MAX = 64
+_SCALAR_KINDS: frozenset[str] = frozenset({"string", "number", "true", "false", "null"})
+_GROWING_METHODS: frozenset[str] = frozenset({"push", "unshift", "splice"})
+
+
+def _is_fixed_table(declarator: Node, array: Node) -> bool:
+    """``const xs = ['a', 1, `b`]``: a non-empty ``const`` literal of at most
+    ``_FIXED_TABLE_MAX`` scalars. An empty literal is a container filled later."""
+    decl = declarator.parent
+    if decl is None or decl.type != "lexical_declaration" or decl.children[0].type != "const":
+        return False
+    items = [c for c in array.children if c.is_named and c.type != "comment"]
+    return 0 < len(items) <= _FIXED_TABLE_MAX and all(_is_scalar(item) for item in items)
+
+
+def _is_scalar(item: Node) -> bool:
+    if item.type == "template_string":
+        return not any(c.type == "template_substitution" for c in item.children)
+    return item.type in _SCALAR_KINDS
+
+
+def _grown_array(call: Node) -> list[str]:
+    """``xs`` when *call* is ``xs.push(...)`` / ``unshift`` / ``splice``."""
+    fn = call.child_by_field_name("function")
+    if fn is None or fn.type != "member_expression":
+        return []
+    name = identifier_name(fn.child_by_field_name("object"))
+    method = node_text(fn.child_by_field_name("property"))
+    return [name] if name is not None and method in _GROWING_METHODS else []
+
+
 class TsJsMarkerHooks(BasePerfDialect):
     def loop_call_marker(
         self, root: str, method: str, node: Node, list_names: frozenset[str]
@@ -149,13 +183,23 @@ class TsJsMarkerHooks(BasePerfDialect):
         return None
 
     def list_bound_names(self, root: Node) -> frozenset[str]:
-        """Names bound to an array literal (``const arr = [...]``)."""
+        """Names bound to an array literal (``const arr = [...]``), less fixed tables.
+
+        A ``const`` bound to a short literal of scalars that the file never grows
+        (``const booleanAttributes = ['async', 'checked', ...]``) has a fixed
+        length, so a probe per iteration is not the O(n·m) the marker means.
+        """
         names: set[str] = set()
+        fixed: set[str] = set()
+        grown: set[str] = set()
         for n in self._walk(root):
+            if n.type == "call_expression":
+                grown.update(_grown_array(n))
+                continue
             if n.type != "variable_declarator":
                 continue
             name = identifier_name(n.child_by_field_name("name"))
             value = n.child_by_field_name("value")
             if name is not None and value is not None and value.type == "array":
-                names.add(name)
-        return frozenset(names)
+                (fixed if _is_fixed_table(n, value) else names).add(name)
+        return frozenset(names | (fixed & grown))

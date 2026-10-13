@@ -235,10 +235,40 @@ _MEMBERSHIP_CASES = [
     ),
     (
         "typescript",
-        "function f(items){ const big = [1,2,3]; "
-        "for (const x of items){ if (big.includes(x)) use(x); } }",
+        "function f(items){ const big = []; "
+        "for (const x of items){ if (!big.includes(x)) big.push(x); } }",
         [("membership_test_against_list_in_loop", "")],
         "big.includes(x) where big is an array literal",
+    ),
+    (
+        "typescript",
+        # hono ``src/jsx/base.ts``: a module table of attribute names.
+        "export const booleanAttributes = ['async', 'checked', 'disabled', `open`];\n"
+        "function f(props){ for (const [k, v] of props){ "
+        "if (typeof v === 'boolean' && booleanAttributes.includes(k)) use(k); } }",
+        [],
+        "a short const literal table is a fixed set",
+    ),
+    (
+        "typescript",
+        "const big = ['a', 'b'];\nbig.push(read());\n"
+        "function f(items){ for (const x of items){ if (big.includes(x)) use(x); } }",
+        [("membership_test_against_list_in_loop", "")],
+        "a literal table the file grows is still a list",
+    ),
+    (
+        "typescript",
+        "let big = ['a', 'b'];\n"
+        "function f(items){ for (const x of items){ if (big.includes(x)) use(x); } }",
+        [("membership_test_against_list_in_loop", "")],
+        "a let-bound literal can be replaced, so it is no fixed table",
+    ),
+    (
+        "typescript",
+        "const big = [" + ", ".join(["'x'"] * 65) + "];\n"
+        "function f(items){ for (const x of items){ if (big.includes(x)) use(x); } }",
+        [("membership_test_against_list_in_loop", "")],
+        "a literal table past the size cap still flags",
     ),
     (
         "typescript",

@@ -25,6 +25,8 @@ performance signal, never the defect score.
 A loop that appends to one string several times is one `string_concat_in_loop`
 finding that lists every append line. TypeScript and JavaScript never get this
 finding, because JavaScript engines make repeated `+=` linear.
+A TypeScript or JavaScript `includes` check against a short `const` table of
+literals is not flagged, because a table of fixed size costs the same at any scale.
 
 The loop and the I/O call do not have to be in the same function. Repowise
 follows the resolved call graph up to three hops and attaches the
