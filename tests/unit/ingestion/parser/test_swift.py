@@ -75,3 +75,10 @@ class TestSwiftParser:
         fi = _make_file_info("swift_pkg/Calculator.swift", "swift")
         result = parser.parse_file(fi, SWIFT_SOURCE)
         assert result.parse_errors == []
+
+    def test_subscript_read_is_not_a_call(self, parser: ASTParser) -> None:
+        # `items[0]` parses as a call_expression whose arguments open with "[".
+        src = b"func use() {\n    let a = items[0]\n    let b = self.rows[1]\n    f(1)\n    g.h(2)\n}\n"
+        fi = _make_file_info("swift_pkg/Use.swift", "swift")
+        result = parser.parse_file(fi, src)
+        assert {c.target_name for c in result.calls} == {"f", "h"}

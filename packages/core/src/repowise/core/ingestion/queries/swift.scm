@@ -72,10 +72,12 @@
 ; ---------------------------------------------------------------------------
 
 ; Simple call: foo(args)
+; The "(" child is load-bearing: a subscript read ``items[0]`` parses as a
+; call_expression too, with "[" in its value_arguments, and is not a call.
 (call_expression
   (simple_identifier) @call.target
   (call_suffix
-    (value_arguments) @call.arguments
+    (value_arguments "(") @call.arguments
   )
 ) @call.site
 
@@ -90,6 +92,6 @@
     )
   )
   (call_suffix
-    (value_arguments) @call.arguments
+    (value_arguments "(") @call.arguments
   )
 ) @call.site
