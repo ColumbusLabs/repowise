@@ -184,6 +184,25 @@ class TestKotlinImportBindings:
             u.endswith("App.kt::run") and v.endswith("Greeting.kt::greet") for u, v, _ in edges
         ), edges
 
+    def test_backticked_keyword_alias_resolves(self, tmp_path: Path) -> None:
+        # Call targets keep their backticks, so the alias must keep them too.
+        caller = "src/main/kotlin/com/app/App.kt"
+        lib = "src/main/kotlin/com/lib/Greeting.kt"
+        files = {
+            caller: (
+                "kotlin",
+                "package com.app\n"
+                "import com.lib.greet as `in`\n"
+                "fun run() { `in`() }\n",
+            ),
+            lib: ("kotlin", "package com.lib\nfun greet(): Int = 1\n"),
+        }
+        parsed = self._parse_with_imports(tmp_path, files, {"com.lib.greet": lib})
+        edges = _resolve_calls(parsed, tmp_path, {caller: {lib}, lib: set()})
+        assert any(
+            u.endswith("App.kt::run") and v.endswith("Greeting.kt::greet") for u, v, _ in edges
+        ), edges
+
     def test_wildcard_import_binds_no_package_name(self, tmp_path: Path) -> None:
         caller = "src/main/kotlin/com/app/App.kt"
         helper = "src/main/kotlin/com/lib/routing/Helper.kt"

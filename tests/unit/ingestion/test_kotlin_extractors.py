@@ -127,3 +127,8 @@ class TestKotlinAliasImports:
         src = b"package x\nimport com.example.Foo\nclass App\n"
         (imp,) = parser.parse_file(_file(), src).imports
         assert [(b.local_name, b.exported_name) for b in imp.bindings] == [("Foo", "Foo")]
+
+    def test_dangling_as_takes_no_alias_from_the_next_line(self, parser: ASTParser) -> None:
+        src = b"package x\nimport com.example.Foo as\nclass App\n"
+        imp = parser.parse_file(_file(), src).imports[0]
+        assert [(b.local_name, b.exported_name) for b in imp.bindings] == [("Foo", "Foo")]
