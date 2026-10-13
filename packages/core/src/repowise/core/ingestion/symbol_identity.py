@@ -31,6 +31,7 @@ from collections.abc import Callable, Iterable
 
 from .models import Symbol
 from .return_types import signature_parameter_count, signature_parameters
+from .type_names import strip_type_arguments
 
 # The payload after ``#``: a parameter count with optional parameter types, or
 # a build-variant predicate.
@@ -113,19 +114,11 @@ def _erased_parameter_type(parameter: str) -> str:
     """``final Map<K, V> m`` -> ``Map``, ``const std::string& s`` -> ``string&``.
 
     Type arguments, qualifiers, modifiers, defaults and the parameter name
-    go; array, pointer, reference, varargs and nullable marks stay.
+    go; array, pointer, reference, varargs and nullable marks stay, so
+    ``vector<int*>`` erases apart from ``vector<int>``.
     """
-    depth = 0
-    kept: list[str] = []
-    for char in _ANNOTATION.sub(" ", parameter).partition("=")[0]:
-        if char == "<":
-            depth += 1
-        elif char == ">" and depth:
-            depth -= 1
-        elif not depth:
-            kept.append(char)
-    text = "".join(kept)
-    words = [w for w in _WORD.findall(text) if w not in _PARAMETER_MODIFIERS]
+    text = _ANNOTATION.sub(" ", parameter).partition("=")[0]
+    words = [w for w in _WORD.findall(strip_type_arguments(text)) if w not in _PARAMETER_MODIFIERS]
     if len(words) > 1 and words[-1] not in _BUILTIN_TYPE_WORDS:
         words.pop()
     marks = "".join(re.sub(r"[\s,]", "", m) for m in _TYPE_MARKS.findall(text))
