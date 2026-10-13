@@ -22,13 +22,6 @@ from ....ingestion.workspace_members import (
 )
 from ...test_selection import JS_SUFFIXES, PYTHON_SUFFIXES
 
-#: Each JS/TS test file's package: the directory (``""`` is the repository
-#: root) whose package.json declares a ``test`` script, or None when no
-#: package.json above the file does. A file the map does not hold is None too.
-#: JS keeps this map because it predates :data:`TestRuns`; folding it in is a
-#: follow-up that must keep reading plans stored with it.
-JsPackages = Mapping[str, str | None]
-
 #: Each test (an id, or the file a capped list collapses to) of a language in
 #: :data:`_RUNNERS`, mapped to ``[run, arg]``: the command that runs its package
 #: from the repository root, and the argument narrowing it to the test's target,
@@ -129,22 +122,36 @@ def _declares_test(manifest: Path) -> bool:
     return isinstance(script, str) and bool(script) and "no test specified" not in script
 
 
-def js_test_packages(
-    root: Path, manifests: Mapping[str, frozenset[str]], tests: Iterable[str]
-) -> dict[str, str | None]:
-    """The package that runs each JS/TS test in *tests*: the nearest package
-    root (*manifests*, from :func:`scan_package_manifests`) whose package.json
-    declares a test script. Blocking file reads: an async caller uses a thread.
-    """
-    repo = _Checkout(root, manifests)
+def _npm(owner: str) -> str:
+    return f"npm --prefix {_arg(owner)} test --" if owner else "npm test --"
 
-    def accepts(directory: str) -> bool:
-        return repo.memo(_declares_test, root / directory / "package.json")
 
-    return {
-        path: repo.owner(path, "package.json", accepts)
-        for path in {_file(test) for test in tests if _is_js(test)}
-    }
+def _js_run(repo: _Checkout, test: str) -> Run | None:
+    """``npm test`` from the nearest package whose package.json declares a
+    test script, on the test file's path relative to that package."""
+    path = _file(test)
+    owner = repo.owner(
+        path, "package.json", lambda d: repo.memo(_declares_test, repo.root / d / "package.json")
+    )
+    return None if owner is None else (_npm(owner), _arg(_relative(path, owner)))
+
+
+def js_root_runs(tests: Iterable[str]) -> dict[str, list[str | None]]:
+    """Each JS/TS test in *tests* run from the repository root: the guess when
+    no checkout is there to read its package from."""
+    return {path: [_npm(""), _arg(path)] for path in {_file(t) for t in tests if _is_js(t)}}
+
+
+def stored_runs(validation: Mapping[str, Any]) -> dict[str, list[str | None]]:
+    """The ``test_runs`` a stored *validation* holds, plus the run of each JS/TS
+    test a plan stored before JS joined them keeps in ``js_packages``."""
+    runs = validation.get("test_runs")
+    out = {k: list(v) for k, v in runs.items()} if isinstance(runs, Mapping) else {}
+    packages = validation.get("js_packages")
+    for path, owner in packages.items() if isinstance(packages, Mapping) else ():
+        if isinstance(owner, str):
+            out.setdefault(path, [_npm(owner), _arg(_relative(path, owner))])
+    return out
 
 
 #: NuGet ids that make a project a test project: the test SDK and each
@@ -280,14 +287,6 @@ def _dotnet_layout(root: Path, manifests: Mapping[str, frozenset[str]]) -> _Dotn
                 by_dir.setdefault(directory, []).append(f"{directory}/{name}")
     referrers, test_projects = _project_graph(root, [p for ps in by_dir.values() for p in ps])
     return _DotnetLayout(by_dir, referrers, test_projects, solution)
-
-
-def plan_packages(tests: Iterable[str], packages: JsPackages | None) -> dict[str, str | None]:
-    """The part of *packages* a plan's *tests* use, stored on the plan so a
-    later read (batches, a served plan) needs no checkout. Empty without a map."""
-    if packages is None:
-        return {}
-    return {path: packages.get(path) for path in {_file(test) for test in tests if _is_js(test)}}
 
 
 Run = tuple[str, str | None]
@@ -464,6 +463,7 @@ _RUNNERS: tuple[tuple[tuple[str, ...], Callable[[_Checkout, str], Run | None]], 
     ((".java", ".kt"), _jvm_run),
     ((".rb",), _ruby_run),
     ((".cs",), _dotnet_run),
+    (JS_SUFFIXES, _js_run),
 )
 
 
@@ -490,7 +490,8 @@ def _run_key(runs: TestRuns, test: str) -> str | None:
 
 
 def plan_runs(tests: Iterable[str], runs: TestRuns | None) -> dict[str, list[str | None]]:
-    """The part of *runs* a plan's *tests* use, stored like :func:`plan_packages`."""
+    """The part of *runs* a plan's *tests* use, stored on the plan so a later
+    read (batches, a served plan) needs no checkout."""
     if runs is None:
         return {}
     keys = {key for test in tests if (key := _run_key(runs, test)) is not None}
@@ -522,29 +523,18 @@ def _package_commands(tests: list[str], runs: TestRuns) -> list[str]:
             groups[run] = None
         elif (args := groups.setdefault(run, set())) is not None:
             args.add(arg)
-    return [" ".join([run, *_merged(args or ())]) for run, args in sorted(groups.items())]
+    return [" ".join([run, *_merged(groups[run] or ())]) for run in sorted(groups, key=_order)]
 
 
-def _js_commands(tests: list[str], packages: JsPackages | None) -> list[str]:
-    """``npm test`` from the package each test belongs to; a test no package
-    can run gets no command. Without *packages* every test runs from the root."""
-    groups: dict[str, list[str]] = {}
-    for test in tests:
-        owner = packages.get(_file(test)) if packages is not None else ""
-        if owner is not None:
-            groups.setdefault(owner, []).append(test[len(owner) + 1 :] if owner else test)
-    return [
-        ("npm test -- " if not owner else f"npm --prefix {_arg(owner)} test -- ")
-        + " ".join(map(_arg, paths))
-        for owner, paths in sorted(groups.items())
-    ]
+def _order(run: str) -> tuple[bool, bool, str]:
+    # npm first, the root package's before the rest: Fix first quotes a plan's first command.
+    return not run.startswith("npm "), run != _npm(""), run
 
 
 def commands_for_tests(
     tests: list[str],
     *,
     total: int | None = None,
-    packages: JsPackages | None = None,
     runs: TestRuns | None = None,
 ) -> list[str]:
     """A command that runs at least everything the plan says validates it.
@@ -556,32 +546,27 @@ def commands_for_tests(
 
     An empty list means the plan has no command to suggest. Every command names
     its tests: with none found, a bare ``pytest`` or ``npm test`` would run a
-    whole suite as if it guarded the change. A JS/TS test runs from the package
-    whose ``test`` script owns it (*packages*), with its path relative to that
-    package; a test no package.json can run gets no command. A Go, Rust, JVM,
-    Ruby or C# test runs its package, or the narrower target *runs* names for it. Any
-    other test, or one *runs* does not hold, gets none in place of a guess that
-    would fail when run.
+    whole suite as if it guarded the change. A JS/TS, Go, Rust, JVM, Ruby or C#
+    test runs its package, or the narrower target *runs* names for it. Any other
+    test, or one *runs* does not hold, gets none in place of a guess that would
+    fail when run.
     """
     if total is not None and total > len(tests):
         tests = sorted({_file(test) for test in tests})
     python_tests = sorted(test for test in tests if _file(test).endswith(PYTHON_SUFFIXES))
-    js_tests = sorted(test for test in tests if _is_js(test))
     commands: list[str] = []
     if python_tests:
         commands.append("pytest " + " ".join(map(_arg, python_tests)))
-    commands.extend(_js_commands(js_tests, packages))
     if runs:
         commands.extend(_package_commands(tests, runs))
     return commands
 
 
 __all__ = [
-    "JsPackages",
     "TestRuns",
     "commands_for_tests",
-    "js_test_packages",
-    "plan_packages",
+    "js_root_runs",
     "plan_runs",
     "runs_for_tests",
+    "stored_runs",
 ]

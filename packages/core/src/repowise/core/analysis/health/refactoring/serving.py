@@ -21,6 +21,7 @@ from repowise.core.analysis.health.effort import EFFORT_ORDER
 from repowise.core.analysis.health.queue_rules import Facet, FilterRule, SortKeys
 from repowise.core.analysis.health.rows import detail_map, field
 
+from .commands import stored_runs
 from .recommendations import _loads_dict
 
 # ``refactoring_view`` predates the opportunity. Both old values keep working
@@ -533,6 +534,7 @@ def validation_from_profile(profile: Mapping[str, Any]) -> Any:
         for target in (profile.get("targets") or [])
         if isinstance(target, dict)
     ]
+    values["test_runs"] = stored_runs(profile)
     return ValidationPlan(**values)
 
 

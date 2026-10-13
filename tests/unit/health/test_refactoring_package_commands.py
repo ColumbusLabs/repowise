@@ -254,15 +254,15 @@ def test_the_wire_type_lists_every_stored_validation_field() -> None:
     fields = set(re.findall(r"^\s*(\w+)\??:", body, re.MULTILINE))
     plan = ValidationPlan(
         "unknown", None, 0, [], False, [], [], [],
-        js_packages={"a.test.ts": ""}, test_runs={"a_test.go": ["go test", "."]},
+        test_runs={"a_test.go": ["go test", "."]},
     )
     assert fields == set(plan.as_dict())
 
 
 def test_python_and_js_commands_are_unchanged_beside_other_languages() -> None:
-    runs = {"a/a_test.go": ["go test", "./a"]}
+    runs = {"a/a_test.go": ["go test", "./a"], "web/a.test.ts": ["npm test --", "web/a.test.ts"]}
     tests = ["tests/test_a.py", "web/a.test.ts", "a/a_test.go"]
-    assert commands_for_tests(tests, packages={"web/a.test.ts": ""}, runs=runs) == [
+    assert commands_for_tests(tests, runs=runs) == [
         "pytest tests/test_a.py",
         "npm test -- web/a.test.ts",
         "go test ./a",

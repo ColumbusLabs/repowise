@@ -7,7 +7,6 @@ from pathlib import Path
 from repowise.core.analysis.health.refactoring.batches import stage_batches
 from repowise.core.analysis.health.refactoring.commands import (
     commands_for_tests,
-    plan_packages,
     plan_runs,
     runs_for_tests,
 )
@@ -174,8 +173,6 @@ def test_the_plan_stores_its_run_and_reads_it_back(tmp_path: Path) -> None:
     assert stored["test_runs"] == {CART_TESTS: [run, None]}
     assert "js_packages" not in stored
     assert validation_from_profile(stored).test_runs == stored["test_runs"]
-    # The JS map holds no C# test.
-    assert plan_packages([CART_TESTS], {}) == {}
     assert plan_runs([CART_TESTS, "tests/test_a.py"], runs) == stored["test_runs"]
 
 

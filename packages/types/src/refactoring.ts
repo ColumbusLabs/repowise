@@ -44,14 +44,10 @@ export interface RecommendationValidation {
   /** Set when no test reaches the change: the step to take before the edit.
    *  Absent on a payload from an older server. */
   prerequisite?: string | null;
-  /** The package directory each shown JS/TS test runs from ("" is the root,
-   *  null when none can run it). Absent when the plan was validated without
-   *  a checkout or names no JS/TS test. */
-  js_packages?: Record<string, string | null>;
-  /** How each shown Go, Rust, JVM or Ruby test runs: the command that runs its
-   *  package from the repository root and the argument narrowing it to the
-   *  file's target (null runs the whole package). Absent when the plan was
-   *  validated without a checkout or names no such test. */
+  /** How each shown JS/TS, Go, Rust, JVM, Ruby or C# test runs: the command
+   *  that runs its package from the repository root and the argument narrowing
+   *  it to the test's target (null runs the whole package). Absent when the
+   *  plan names no test any of them can run. */
   test_runs?: Record<string, [string, string | null]>;
 }
 
