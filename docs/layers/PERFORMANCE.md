@@ -29,6 +29,11 @@ An I/O call is recognised by the library its receiver was imported from. In
 TypeScript and JavaScript only the module name counts, so a local variable named
 like a package (`ws`) or a module path that contains a library name
 (`plugin-sdk/provider-http`) is not read as that library.
+In Java, any call on a Spring Data repository or a MyBatis mapper inside a `for`
+loop counts as a database call, whatever the method is named. The receiver's
+declared type decides: an interface that extends a Spring Data repository, carries
+`@Mapper`, or sits in a `@MapperScan` package. JPA lazy associations read in a loop
+are not reported yet.
 
 Performance analysis covers Python, TypeScript/JavaScript (including Vue and
 Svelte scripts), Java, Go, C# (including Razor), Rust, Kotlin, Scala, Ruby, C++,
