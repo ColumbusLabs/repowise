@@ -256,6 +256,23 @@ _MEMBERSHIP_CASES = [
         [("membership_test_against_list_in_loop", "")],
         "a literal table the file grows is still a list",
     ),
+    *(
+        (
+            "typescript",
+            f"const big = ['a', 'b'];\n{change}\n"
+            "function f(items){ for (const x of items){ if (big.includes(x)) use(x); } }",
+            [("membership_test_against_list_in_loop", "")],
+            f"a literal table the file changes is still a list: {change}",
+        )
+        for change in (
+            "big[2] = read();",
+            "big.length = 0;",
+            "big.fill('c');",
+            "big.sort();",
+            "big.reverse();",
+            "load(big);",
+        )
+    ),
     (
         "typescript",
         "let big = ['a', 'b'];\n"

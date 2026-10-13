@@ -544,7 +544,11 @@ def _collect_perf_hits(
     do_in_place = _overrides(dialect, "runs_in_place")
     # An awaited call on a line whose lint suppression says awaiting in this loop
     # is intended (a retry or a stream read) is not a per-iteration finding.
-    awaits_allowed = dialect.awaits_in_loop_allowed(root.text or b"")
+    awaits_allowed = (
+        dialect.awaits_in_loop_allowed(root.text or b"")
+        if _overrides(dialect, "awaits_in_loop_allowed")
+        else frozenset()
+    )
 
     def probe(call: Node) -> str | None:
         return dialect.call_sink_kind(

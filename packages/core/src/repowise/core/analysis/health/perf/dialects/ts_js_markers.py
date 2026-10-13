@@ -121,12 +121,22 @@ def _is_collection_spread_of(node: Node, name: str) -> bool:
 # a measurement.
 _FIXED_TABLE_MAX = 64
 _SCALAR_KINDS: frozenset[str] = frozenset({"string", "number", "true", "false", "null"})
-_GROWING_METHODS: frozenset[str] = frozenset({"push", "unshift", "splice"})
+# Array methods that change an array in place; ``sort`` / ``reverse`` / ``fill``
+# keep its length but show the file treats it as data, not a table.
+_MUTATING_METHODS: frozenset[str] = frozenset(
+    {"push", "unshift", "splice", "pop", "shift", "fill", "sort", "reverse", "copyWithin"}
+)
+_ASSIGN_KINDS: frozenset[str] = frozenset(
+    {"assignment_expression", "augmented_assignment_expression"}
+)
 
 
 def _is_fixed_table(declarator: Node, array: Node) -> bool:
     """``const xs = ['a', 1, `b`]``: a non-empty ``const`` literal of at most
-    ``_FIXED_TABLE_MAX`` scalars. An empty literal is a container filled later."""
+    ``_FIXED_TABLE_MAX`` scalars. An empty literal is a container filled later.
+
+    The TS twin of the Python dialect's ``_fixed_set``.
+    """
     decl = declarator.parent
     if decl is None or decl.type != "lexical_declaration" or decl.children[0].type != "const":
         return False
@@ -140,14 +150,28 @@ def _is_scalar(item: Node) -> bool:
     return item.type in _SCALAR_KINDS
 
 
-def _grown_array(call: Node) -> list[str]:
-    """``xs`` when *call* is ``xs.push(...)`` / ``unshift`` / ``splice``."""
-    fn = call.child_by_field_name("function")
-    if fn is None or fn.type != "member_expression":
+def _changed_arrays(node: Node) -> list[str]:
+    """Names *node* may change: ``xs.push(...)`` and the other mutating methods,
+    ``xs[i] = v`` / ``xs.length = 0``, and ``xs`` handed to a call (the callee
+    may change it)."""
+    if node.type in _ASSIGN_KINDS:
+        left = node.child_by_field_name("left")
+        if left is not None and left.type in ("subscript_expression", "member_expression"):
+            return [n for n in (identifier_name(left.child_by_field_name("object")),) if n]
         return []
-    name = identifier_name(fn.child_by_field_name("object"))
-    method = node_text(fn.child_by_field_name("property"))
-    return [name] if name is not None and method in _GROWING_METHODS else []
+    if node.type != "call_expression":
+        return []
+    names: list[str] = []
+    fn = node.child_by_field_name("function")
+    if fn is not None and fn.type == "member_expression":
+        method = node_text(fn.child_by_field_name("property"))
+        name = identifier_name(fn.child_by_field_name("object"))
+        if name is not None and method in _MUTATING_METHODS:
+            names.append(name)
+    args = node.child_by_field_name("arguments")
+    if args is not None:
+        names.extend(n for c in args.children if (n := identifier_name(c)) is not None)
+    return names
 
 
 class TsJsMarkerHooks(BasePerfDialect):
@@ -185,16 +209,17 @@ class TsJsMarkerHooks(BasePerfDialect):
     def list_bound_names(self, root: Node) -> frozenset[str]:
         """Names bound to an array literal (``const arr = [...]``), less fixed tables.
 
-        A ``const`` bound to a short literal of scalars that the file never grows
-        (``const booleanAttributes = ['async', 'checked', ...]``) has a fixed
-        length, so a probe per iteration is not the O(n·m) the marker means.
+        A ``const`` bound to a short literal of scalars that the file never
+        changes or hands to a call (``const booleanAttributes = ['async',
+        'checked', ...]``) has a fixed length, so a probe per iteration is not
+        the O(n·m) the marker means.
         """
         names: set[str] = set()
         fixed: set[str] = set()
-        grown: set[str] = set()
+        changed: set[str] = set()
         for n in self._walk(root):
-            if n.type == "call_expression":
-                grown.update(_grown_array(n))
+            if n.type == "call_expression" or n.type in _ASSIGN_KINDS:
+                changed.update(_changed_arrays(n))
                 continue
             if n.type != "variable_declarator":
                 continue
@@ -202,4 +227,4 @@ class TsJsMarkerHooks(BasePerfDialect):
             value = n.child_by_field_name("value")
             if name is not None and value is not None and value.type == "array":
                 (fixed if _is_fixed_table(n, value) else names).add(name)
-        return frozenset(names | (fixed & grown))
+        return frozenset(names | (fixed & changed))

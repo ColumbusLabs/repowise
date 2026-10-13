@@ -75,6 +75,8 @@ _OWN_HEADER = (
         ("tool/ci_script.dart", "tooling"),
         ("desktop_photo_search/material/tool/grind.dart", "tooling"),
         ("lib/src/tool/picker.dart", "production"),
+        ("lib/tool/picker.dart", "production"),
+        ("bin/tool/run.dart", "production"),
         ("packages/app/lib/tool/picker.dart", "production"),
         ("src/cmd/go/internal/tool/tool.go", "production"),
         ("tool/release.py", "production"),
